@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Irish Driving Simulator</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+    <div id="hud"></div>
+    <div id="tuner" hidden></div>
+    <div id="editor" hidden>
+      <canvas id="editor-canvas"></canvas>
+      <aside id="editor-panel"></aside>
+    </div>
+    <div id="help">
+      <b>W</b>/<b>S</b> throttle &amp; brake · <b>A</b>/<b>D</b> steer · <b>Space</b> handbrake ·
+      <b>R</b> reverse · <b>C</b> camera · <b>T</b> tuning · <b>E</b> road editor · <b>M</b> engine sound · <b>Backspace</b> reset
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
