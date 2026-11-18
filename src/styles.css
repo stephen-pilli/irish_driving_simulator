@@ -341,3 +341,190 @@ html, body {
 }
 .ed-keys dt { color: var(--text); font-weight: 600; }
 .ed-keys dd { margin: 0; color: var(--muted); }
+
+/* ---- Replay banner ---- */
+#replay {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: rgba(255, 93, 77, 0.16);
+  border: 1px solid rgba(255, 93, 77, 0.5);
+  color: #ffd9d4;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(8px);
+}
+
+/* ---- Post-drive report ---- */
+#report {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(6, 9, 13, 0.88);
+  backdrop-filter: blur(10px);
+  overflow: auto;
+}
+#report[hidden] { display: none; }
+
+.report-sheet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 24px;
+  width: min(1180px, 100%);
+  max-height: 100%;
+  padding: 26px 28px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 18px;
+  overflow: auto;
+}
+/* One column when there is no room for two. The marking sheet comes first:
+   it is the thing being read, and the route map is the illustration. */
+@media (max-width: 1040px) {
+  .report-sheet { grid-template-columns: minmax(0, 1fr); }
+}
+
+.report-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--edge);
+}
+.report-result {
+  display: block;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.report-head.pass .report-result { color: var(--accent); }
+.report-head.fail .report-result { color: var(--alert); }
+.report-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.report-actions { display: flex; gap: 8px; }
+.report-actions button {
+  padding: 9px 15px;
+  border-radius: 9px;
+  border: 1px solid var(--edge);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.report-actions button:hover { background: rgba(255, 255, 255, 0.11); }
+.report-actions button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #09210f;
+  font-weight: 600;
+}
+
+.report-reasons {
+  margin: 16px 0 0;
+  padding: 12px 16px 12px 32px;
+  border-radius: 10px;
+  background: rgba(255, 93, 77, 0.12);
+  border: 1px solid rgba(255, 93, 77, 0.35);
+  color: #ffc9c2;
+}
+
+.report-columns {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 26px;
+  margin-top: 20px;
+}
+@media (max-width: 760px) {
+  .report-columns { grid-template-columns: minmax(0, 1fr); }
+}
+.report-columns h3 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.report-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.report-table th, .report-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.report-table thead th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.report-table td { width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+.report-table tbody th { font-weight: 400; color: var(--muted); }
+.report-table tr.marked tbody th, .report-table tr.marked th { color: var(--text); }
+.report-table tr.marked td { color: #ffa51f; }
+.report-table tr.flagged th { color: #ffc9c2; }
+.report-table tr.flagged td { color: var(--alert); font-weight: 700; }
+
+.report-small { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+
+.report-faults { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.report-fault {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+.report-fault:hover { background: rgba(255, 255, 255, 0.09); }
+.report-fault.selected { border-color: var(--accent); }
+.report-fault .chip {
+  display: grid;
+  place-items: center;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.1);
+}
+.report-fault.grade-2 .chip { background: rgba(255, 165, 31, 0.22); color: #ffc46b; }
+.report-fault.grade-3 .chip { background: rgba(255, 93, 77, 0.24); color: #ff9d92; }
+.report-fault strong { display: block; font-weight: 500; }
+.report-fault em { font-style: normal; font-size: 11.5px; color: var(--muted); }
+.report-fault .at {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+.report-fault .at small { display: block; font-size: 10.5px; opacity: 0.75; }
+.report-empty { padding: 12px; color: var(--muted); }
+
+.report-side { display: grid; align-content: start; gap: 10px; }
+.report-side canvas {
+  /* Capped, not just fluid: a square canvas told only to fill its column grows
+     to the column's width, which on a wide, short window pushes the entire
+     report off the bottom of the screen. */
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--edge);
+  cursor: pointer;
+}
+.report-note { margin: 0; font-size: 12px; color: var(--muted); }

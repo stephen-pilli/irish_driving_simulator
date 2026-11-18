@@ -4,7 +4,27 @@ import { GraphDoc, type Selection } from './graphDoc'
 import { fromJson, toJson, toTypeScript } from './serialise'
 import { PlanView, type CarPose } from './view'
 
-const STORAGE_KEY = 'ids.p1.roadLayout'
+const STORAGE_KEY = 'ids.roadLayout'
+/** Where a layout left over from an older built-in town is parked. */
+const SUPERSEDED_KEY = 'ids.roadLayout.superseded'
+
+/**
+ * Cheap content hash of the built-in town, stored with a saved layout.
+ *
+ * Without it, anyone who had once opened the editor was pinned forever to the
+ * town as it stood that day: the saved copy silently replaced the built-in one
+ * at boot, so later additions to Ballyroad never appeared and the simulator
+ * looked like it had simply ignored them. Nothing warned about it.
+ */
+function fingerprint(spec: LaneGraphSpec): string {
+  const text = JSON.stringify(spec)
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16)
+}
 
 const CATEGORIES: Array<[string, string]> = [
   ['urbanCore', 'Urban core (30)'],
@@ -48,6 +68,8 @@ export class RoadEditor {
   private linkFrom: string | null = null
   private applyQueued = false
   private frameHandle = 0
+  /** Fingerprint of the built-in town this editor was opened against. */
+  private readonly base: string
 
   constructor(
     private readonly root: HTMLElement,
@@ -56,7 +78,8 @@ export class RoadEditor {
     initial: LaneGraphSpec,
     private readonly hooks: EditorHooks,
   ) {
-    this.doc = new GraphDoc(RoadEditor.restore() ?? initial)
+    this.base = fingerprint(initial)
+    this.doc = new GraphDoc(RoadEditor.restore(this.base) ?? initial)
     this.view = new PlanView(canvas)
 
     canvas.addEventListener('pointerdown', this.onPointerDown)
@@ -81,11 +104,26 @@ export class RoadEditor {
     this.afterChange()
   }
 
-  private static restore(): LaneGraphSpec | null {
+  /**
+   * A saved layout is only restored when it was built on the town as it stands
+   * now. One built on an older town is set aside rather than thrown away, and
+   * can still be pasted back in through the editor's JSON box.
+   */
+  private static restore(base: string): LaneGraphSpec | null {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
       if (!raw) return null
-      return fromJson(raw)
+      const saved = JSON.parse(raw) as { base?: string; spec?: unknown }
+      if (saved.base === base && saved.spec) return fromJson(JSON.stringify(saved.spec))
+
+      localStorage.setItem(SUPERSEDED_KEY, raw)
+      localStorage.removeItem(STORAGE_KEY)
+      console.info(
+        'Road editor: your saved layout was built on an earlier version of the ' +
+          'built-in town, so the current town is being used instead. The old ' +
+          `layout is kept under localStorage["${SUPERSEDED_KEY}"].`,
+      )
+      return null
     } catch {
       return null
     }
@@ -93,7 +131,8 @@ export class RoadEditor {
 
   private save(): void {
     try {
-      localStorage.setItem(STORAGE_KEY, toJson(this.doc.toSpec()))
+      const payload = { base: this.base, spec: JSON.parse(toJson(this.doc.toSpec())) }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     } catch {
       /* a blocked or full store must not stop editing */
     }

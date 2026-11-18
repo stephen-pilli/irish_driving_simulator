@@ -43,6 +43,20 @@ export class SignalController {
     return this.groupSeconds * this.groups.length
   }
 
+  /**
+   * Where the controller is in its cycle. A replay has to put every set of
+   * lights back exactly where it was, or a drive that crossed on green the
+   * first time can cross on red the second and the replay stops being evidence
+   * of anything.
+   */
+  get phaseSeconds(): number {
+    return this.time
+  }
+
+  setPhaseSeconds(t: number): void {
+    this.time = ((t % this.cycleSeconds) + this.cycleSeconds) % this.cycleSeconds
+  }
+
   update(dt: number): void {
     this.time = (this.time + dt) % this.cycleSeconds
   }

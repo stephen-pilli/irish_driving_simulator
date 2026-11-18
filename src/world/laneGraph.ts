@@ -81,6 +81,12 @@ export type JunctionControl =
   | { kind: 'yield'; yieldEdges: EdgeId[] }
   | { kind: 'stop'; stopEdges: EdgeId[] }
   | { kind: 'signals'; groups: EdgeId[][]; greenSeconds: number; amberSeconds: number }
+  /**
+   * A roundabout. Authored as a single node; the graph expands it into a real
+   * one-way circulatory carriageway with a yield-controlled entry per arm, so
+   * nothing downstream needs to know roundabouts exist as a special case.
+   */
+  | { kind: 'roundabout' }
 
 export interface JunctionSpec {
   control: JunctionControl
@@ -93,6 +99,11 @@ export interface NodeSpec {
   x: number
   y: number
   junction?: JunctionSpec
+  /**
+   * Set by the roundabout expansion on the former junction node, which is left
+   * behind with no edges so the renderer knows where to put the island.
+   */
+  island?: { radius: number }
 }
 
 export interface EdgeSpec {
@@ -106,6 +117,8 @@ export interface EdgeSpec {
   speedLimit?: number
   lanes?: Lane[]
   centreLine?: CentreLine
+  /** Set on generated circulatory carriageway, naming the roundabout it rings. */
+  circulatoryOf?: NodeId
 }
 
 export interface LaneGraphSpec {
@@ -130,6 +143,8 @@ export interface Edge {
   startTrim: number
   endTrim: number
   halfWidth: number
+  /** Set on generated circulatory carriageway, naming the roundabout it rings. */
+  circulatoryOf?: NodeId
   /** Lateral offset of a lane's centre. Positive is left of the centre line. */
   laneOffset(index: number): number
   /** Signed lateral span of a lane, as [nearEdge, farEdge] offsets. */
@@ -197,7 +212,12 @@ export class LaneGraph {
   private readonly segments: Segment[] = []
   private readonly grid = new Map<string, number[]>()
 
-  constructor(spec: LaneGraphSpec) {
+  constructor(rawSpec: LaneGraphSpec) {
+    // Roundabouts are authored as a single node and expanded here, so the
+    // editor and the town file stay readable while everything downstream sees
+    // ordinary one-way roads with yield-controlled entries.
+    const spec = expandRoundabouts(rawSpec)
+
     for (const n of spec.nodes) {
       this.nodes.set(n.id, { ...n, edges: [] })
     }
@@ -251,6 +271,7 @@ export class LaneGraph {
       speedLimit: spec.speedLimit ?? DEFAULT_SPEED_LIMITS[spec.category],
       lanes,
       centreLine: spec.centreLine ?? (lanes.length > 1 ? 'broken' : 'none'),
+      ...(spec.circulatoryOf ? { circulatoryOf: spec.circulatoryOf } : {}),
       points,
       cumulative,
       length,
@@ -479,4 +500,141 @@ export function withinJunction(loc: Localisation, graph: LaneGraph, margin = 0):
     if (s <= node.junction.radius + margin) return true
   }
   return false
+}
+
+/**
+ * Width of a single-lane circulatory carriageway. Wider than a running lane:
+ * a roundabout has to take a long vehicle tracking round a tight radius.
+ */
+const CIRCULATORY_WIDTH = 5.5
+
+/** Radius of the paved entry area where an arm meets the ring. */
+const ENTRY_RADIUS = 5
+
+/**
+ * Direction a road leaves a node, taking its shape points into account.
+ *
+ * Resolved against the working node list rather than the original spec, so a
+ * road joining two roundabouts still has a bearing at the second one after the
+ * first has already moved its far end onto a ring.
+ */
+function bearingFromNode(nodes: NodeSpec[], edge: EdgeSpec, nodeId: NodeId): number | null {
+  const node = nodes.find((n) => n.id === nodeId)
+  if (!node) return null
+  const via = edge.via ?? []
+  const other = nodes.find((n) => n.id === (edge.from === nodeId ? edge.to : edge.from))
+  if (!other) return null
+
+  const next =
+    edge.from === nodeId ? (via[0] ?? other) : (via[via.length - 1] ?? other)
+  const dx = next.x - node.x
+  const dy = next.y - node.y
+  if (Math.hypot(dx, dy) < EPS) return null
+  return Math.atan2(dy, dx)
+}
+
+/**
+ * Turn every node controlled as a roundabout into an actual roundabout: a
+ * one-way circulatory carriageway, an entry per arm that yields to it, and an
+ * island in the middle.
+ *
+ * Done as a graph transformation rather than as a special case in the renderer
+ * and the rules engine, because a roundabout genuinely IS a one-way road that
+ * you give way onto. Expanding it means lane following, localisation, stop
+ * lines, priority and traffic all work on it with no extra code, and it means
+ * the thing the driver sees and the thing the rules read cannot disagree.
+ *
+ * The ring runs CLOCKWISE, which is the direction of travel in Ireland.
+ */
+export function expandRoundabouts(spec: LaneGraphSpec): LaneGraphSpec {
+  const targets = spec.nodes.filter((n) => n.junction?.control.kind === 'roundabout')
+  if (targets.length === 0) return spec
+
+  const nodes: NodeSpec[] = spec.nodes.map((n) => ({ ...n }))
+  const edges: EdgeSpec[] = spec.edges.map((e) => ({ ...e }))
+
+  for (const centre of targets) {
+    const node = nodes.find((n) => n.id === centre.id)!
+    const radius = Math.max(8, centre.junction?.radius ?? 18)
+
+    const arms = edges
+      .filter((e) => e.from === centre.id || e.to === centre.id)
+      .map((edge) => ({ edge, bearing: bearingFromNode(nodes, edge, centre.id) }))
+      .filter((a): a is { edge: EdgeSpec; bearing: number } => a.bearing !== null)
+      // Descending bearing is clockwise in this coordinate system.
+      .sort((a, b) => b.bearing - a.bearing)
+
+    // The centre node stays, stripped of its junction, purely to mark the
+    // island. Without at least two arms there is nothing to ring.
+    delete node.junction
+    if (arms.length < 2) continue
+    node.island = { radius: Math.max(1.5, radius - CIRCULATORY_WIDTH / 2 - 0.4) }
+
+    const limit = Math.min(
+      ...arms.map((a) => a.edge.speedLimit ?? DEFAULT_SPEED_LIMITS[a.edge.category]),
+    )
+    const slowest = arms.reduce((lowest, a) =>
+      (a.edge.speedLimit ?? DEFAULT_SPEED_LIMITS[a.edge.category]) <
+      (lowest.edge.speedLimit ?? DEFAULT_SPEED_LIMITS[lowest.edge.category])
+        ? a
+        : lowest,
+    )
+
+    // One node per arm, sitting on the ring where that arm meets it.
+    const ringNodes = arms.map((arm, i) => {
+      const id: NodeId = `${centre.id}_r${i}`
+      nodes.push({
+        id,
+        x: centre.x + Math.cos(arm.bearing) * radius,
+        y: centre.y + Math.sin(arm.bearing) * radius,
+        junction: {
+          radius: ENTRY_RADIUS,
+          // Entering traffic gives way to traffic already on the roundabout.
+          control: { kind: 'yield', yieldEdges: [arm.edge.id] },
+        },
+      })
+      if (arm.edge.from === centre.id) arm.edge.from = id
+      else arm.edge.to = id
+      return id
+    })
+
+    for (let i = 0; i < arms.length; i++) {
+      const a = arms[i]!
+      const b = arms[(i + 1) % arms.length]!
+      let delta = b.bearing - a.bearing
+      // Always travel the short way clockwise, i.e. with bearing decreasing.
+      while (delta > 0) delta -= Math.PI * 2
+      while (delta <= -Math.PI * 2) delta += Math.PI * 2
+      if (Math.abs(delta) < 0.05) continue
+
+      const steps = Math.max(2, Math.ceil(Math.abs(delta) / (8 * (Math.PI / 180))))
+      const via: Vec2[] = []
+      for (let k = 1; k < steps; k++) {
+        const bearing = a.bearing + (delta * k) / steps
+        via.push({
+          x: centre.x + Math.cos(bearing) * radius,
+          y: centre.y + Math.sin(bearing) * radius,
+        })
+      }
+
+      edges.push({
+        id: `${centre.id}_ring${i}`,
+        from: ringNodes[i]!,
+        to: ringNodes[(i + 1) % arms.length]!,
+        via,
+        category: slowest.edge.category,
+        speedLimit: limit,
+        lanes: [generalLane(1, CIRCULATORY_WIDTH)],
+        centreLine: 'none',
+        circulatoryOf: centre.id,
+      })
+    }
+  }
+
+  return { nodes, edges }
+}
+
+/** True when this edge is part of a roundabout's circulatory carriageway. */
+export function isCirculatory(edge: Edge): boolean {
+  return edge.circulatoryOf !== undefined
 }

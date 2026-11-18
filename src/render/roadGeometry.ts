@@ -232,6 +232,31 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
     }
   }
 
+  // Roundabout islands. The ring itself is ordinary road geometry, generated
+  // from the circulatory edges like any other one-way street; only the raised
+  // middle needs drawing by hand.
+  for (const node of graph.nodes.values()) {
+    if (!node.island) continue
+    const r = node.island.radius
+
+    // One solid disc for the island and an open tube for the kerb around it.
+    // A capped cylinder under a separate top face put two surfaces a centimetre
+    // apart, and at any distance the depth buffer picked the wrong one, so the
+    // island rendered as a grey slab instead of as planting.
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.18, 40), materials.verge)
+    body.position.set(node.x, 0.09, -node.y)
+    body.receiveShadow = true
+    group.add(body)
+
+    const kerb = new THREE.Mesh(
+      new THREE.CylinderGeometry(r + 0.02, r + 0.02, 0.2, 40, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.9, side: THREE.DoubleSide }),
+    )
+    kerb.position.set(node.x, 0.1, -node.y)
+    kerb.castShadow = true
+    group.add(kerb)
+  }
+
   addMesh(group, surfaces.length ? mergeGeometries(surfaces) : null, materials.tarmac)
   addMesh(group, vergeParts.length ? mergeGeometries(vergeParts) : null, materials.verge)
   addMesh(group, paintParts.length ? mergeGeometries(paintParts) : null, materials.paint)

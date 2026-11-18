@@ -240,6 +240,11 @@ export class World {
     let ti = 0
 
     for (const edge of this.graph.edges.values()) {
+      // A roundabout's circulatory carriageway is an ordinary road as far as
+      // the rest of the engine is concerned, which means the roadside pass
+      // would happily line the island with houses.
+      if (edge.circulatoryOf) continue
+
       const from = edge.startTrim + 4
       const to = edge.length - edge.endTrim - 4
       const builtUp = isBuiltUp(edge)
@@ -288,6 +293,38 @@ export class World {
           canopies.setMatrixAt(ti, dummy.matrix)
           ti++
         }
+      }
+    }
+
+    // Roundabout islands: a tree and a ring of low planting, which is both
+    // what they usually hold and what makes the island read as solid rather
+    // than as a hole in the road.
+    for (const node of this.graph.nodes.values()) {
+      if (!node.island) continue
+      const r = node.island.radius
+
+      if (ti < trunks.count) {
+        dummy.position.set(node.x, 1.5, -node.y)
+        dummy.rotation.set(0, rand() * Math.PI, 0)
+        dummy.scale.setScalar(1.15)
+        dummy.updateMatrix()
+        trunks.setMatrixAt(ti, dummy.matrix)
+        dummy.position.y = 5.6
+        dummy.updateMatrix()
+        canopies.setMatrixAt(ti, dummy.matrix)
+        ti++
+      }
+
+      const count = Math.max(6, Math.round(r * 0.9))
+      for (let i = 0; i < count && hi < hedges.count; i++) {
+        const angle = (i / count) * Math.PI * 2
+        const ring = r * 0.62
+        dummy.position.set(node.x + Math.cos(angle) * ring, 0.4, -(node.y + Math.sin(angle) * ring))
+        dummy.rotation.set(0, -angle, 0)
+        dummy.scale.set(1.6, 0.8, 1.6)
+        dummy.updateMatrix()
+        hedges.setMatrixAt(hi, dummy.matrix)
+        hi++
       }
     }
 

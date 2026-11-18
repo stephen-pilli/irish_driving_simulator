@@ -15,6 +15,7 @@ import { generalLane, twoWay, type LaneGraphSpec } from './laneGraph'
  *    road and an 80 km/h regional road, so speed changes are unavoidable
  *  - a continuous white centre line on the southern road, where overtaking
  *    must not happen
+ *  - a three-arm roundabout in the north-east corner
  */
 export const BALLYROAD: LaneGraphSpec = {
   nodes: [
@@ -58,7 +59,15 @@ export const BALLYROAD: LaneGraphSpec = {
         control: { kind: 'stop', stopEdges: ['town_south'] },
       },
     },
-    { id: 'n_ne', x: 300, y: 200 },
+    {
+      id: 'n_ne',
+      x: 300,
+      y: 200,
+      // Expanded by the graph into a clockwise circulatory carriageway with a
+      // yield-controlled entry on each of its three arms.
+      junction: { radius: 20, control: { kind: 'roundabout' } },
+    },
+    { id: 'n_ne_east', x: 470, y: 240 },
     { id: 'n_rural_end', x: 520, y: -200 },
     { id: 'n_se', x: 260, y: -260 },
     { id: 'n_sw', x: -260, y: -260 },
@@ -116,6 +125,14 @@ export const BALLYROAD: LaneGraphSpec = {
         { x: 232, y: 236 },
       ],
       lanes: twoWay(),
+      centreLine: 'broken',
+    },
+    {
+      id: 'ne_spur',
+      from: 'n_ne',
+      to: 'n_ne_east',
+      category: 'ruralLocal',
+      lanes: twoWay(3.2),
       centreLine: 'broken',
     },
     {

@@ -29,6 +29,19 @@ export type Aspect =
   | 'Observation'
   | 'Anticipation and reaction'
 
+/** Every heading on the report form, in the order the form prints them. */
+export const ALL_ASPECTS: readonly Aspect[] = [
+  'Vehicle controls',
+  'Moving off',
+  'Progress',
+  'Road position',
+  'Overtaking',
+  'Speed',
+  'Traffic controls',
+  'Observation',
+  'Anticipation and reaction',
+]
+
 export interface Fault {
   ruleId: string
   aspect: Aspect

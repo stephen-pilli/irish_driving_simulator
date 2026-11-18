@@ -1,6 +1,6 @@
 import { msToKmh } from './core/math'
 import { startLoop } from './core/loop'
-import { Input } from './input/input'
+import { Input, type DriverInput } from './input/input'
 import { CameraRig, DEFAULT_CAMERA_PARAMS } from './render/cameras'
 import { CarView } from './render/car'
 import { World } from './render/scene'
@@ -13,8 +13,10 @@ import {
   turningCircleDiameter,
   type VehicleState,
 } from './sim/vehicle'
+import { DriveRecorder, ReplaySession, restoreSignalPhases } from './sim/recorder'
 import { EngineAudio } from './ui/audio'
 import { Hud } from './ui/hud'
+import { Report } from './ui/report'
 import { RulesEngine } from './rules/engine'
 import { irishRules } from './rules/irish'
 import { Tuner } from './ui/tuner'
@@ -27,6 +29,10 @@ import { BALLYROAD, START } from './world/town'
 const canvas = document.getElementById('viewport') as HTMLCanvasElement
 const hudRoot = document.getElementById('hud') as HTMLElement
 const tunerRoot = document.getElementById('tuner') as HTMLElement
+const replayBanner = document.getElementById('replay') as HTMLElement
+
+/** 120 Hz: fine enough that the steering is smooth, cheap enough to be free. */
+const FIXED_DT = 1 / 120
 
 // The layout is mutable: the editor swaps it out while the app is running.
 let graph = new LaneGraph(BALLYROAD)
@@ -41,11 +47,27 @@ const hud = new Hud(hudRoot)
 const audio = new EngineAudio()
 let rules = new RulesEngine(irishRules(), graph, signals)
 
+const recorder = new DriveRecorder()
+/** Non-null while a recorded drive is being played back instead of driven. */
+let replay: ReplaySession | null = null
+/** The live drive, parked while a replay borrows the car. */
+let liveState: VehicleState | null = null
+
 let car = new CarView(params)
 world.scene.add(car.group)
 
 const state: VehicleState = createState()
 reset()
+
+const report = new Report(document.getElementById('report') as HTMLElement, {
+  replayFrom: startReplay,
+  close: () => report.hide(),
+  restart: () => {
+    report.hide()
+    stopReplay()
+    reset()
+  },
+})
 
 const tuner = new Tuner(tunerRoot, () => {
   // Changing the wheelbase changes the model, so rebuild the view in place.
@@ -105,6 +127,50 @@ function reset(): void {
   const pose = sampleEdge(edge, s)
   Object.assign(state, createState(p.x, p.y, pose.heading))
   rules.reset()
+  recorder.begin(state, params, signals, FIXED_DT)
+}
+
+/**
+ * Hand the car over to a recording. The live drive is parked rather than
+ * discarded, so watching a fault back does not cost the driver their progress.
+ */
+function startReplay(seconds: number): void {
+  const drive = recorder.finish()
+  if (!drive) return
+  if (!replay) liveState = { ...state }
+
+  replay = new ReplaySession(drive)
+  replay.seek(seconds)
+  restoreSignalPhases(drive, signals, seconds)
+  Object.assign(state, replay.state)
+  report.hide()
+}
+
+function stopReplay(): void {
+  if (!replay) return
+  replay = null
+  if (liveState) {
+    Object.assign(state, liveState)
+    liveState = null
+  }
+}
+
+function openReport(): void {
+  stopReplay()
+  report.show(rules, recorder.finish())
+}
+
+/**
+ * One step of the live drive. Factored out of the loop so that the dev hook
+ * can advance the simulation without a frame — otherwise the only way to reach
+ * a situation worth looking at is to sit there driving to it in real time.
+ */
+function stepSimulation(driver: DriverInput, dt: number): void {
+  // Recorded before the step, so the input is paired with the state it acted on.
+  recorder.record(driver, state)
+  stepVehicle(state, driver, params, dt)
+  for (const controller of signals.values()) controller.update(dt)
+  rules.update(state, driver, dt)
 }
 
 function handleActions(): void {
@@ -128,7 +194,18 @@ function handleActions(): void {
       case 'toggleAudio':
         audio.toggle()
         break
+      case 'toggleReport':
+        if (report.isOpen) report.hide()
+        else openReport()
+        break
+      case 'cancel':
+        if (replay) stopReplay()
+        else if (report.isOpen) report.hide()
+        else if (editor.isOpen) editor.toggle()
+        break
       case 'reset':
+        stopReplay()
+        report.hide()
         reset()
         break
     }
@@ -143,20 +220,36 @@ window.addEventListener('resize', () => {
 })
 
 const loop = startLoop({
-  // 120 Hz: fine enough that the steering is smooth, cheap enough to be free.
-  fixedDt: 1 / 120,
+  fixedDt: FIXED_DT,
   update(dt) {
-    if (editor.isOpen) return
-    const driver = input.sample()
-    stepVehicle(state, driver, params, dt)
-    for (const controller of signals.values()) controller.update(dt)
-    rules.update(state, driver, dt)
+    if (editor.isOpen || report.isOpen) return
+
+    if (replay) {
+      // A replay is the recorded drive re-run, not a video: the same vehicle
+      // model, the same inputs, the same lights.
+      if (!replay.advance()) {
+        stopReplay()
+        return
+      }
+      Object.assign(state, replay.state)
+      for (const controller of signals.values()) controller.update(dt)
+      return
+    }
+
+    stepSimulation(input.sample(), dt)
   },
   render(frameDt) {
     handleActions()
-    // The editor covers the viewport, so there is nothing to draw behind it.
-    if (editor.isOpen) return
-    const driver = input.driver
+    // The editor and the report both cover the viewport.
+    if (editor.isOpen || report.isOpen) return
+    const driver = replay ? replay.input : input.driver
+
+    replayBanner.hidden = !replay
+    if (replay) {
+      replayBanner.textContent =
+        `REPLAY  ${replay.seconds.toFixed(1)}s of ${replay.totalSeconds.toFixed(1)}s` +
+        `  ·  Esc to return to your drive`
+    }
 
     car.setShellVisible(rig.currentMode !== 'bonnet')
     car.update(state, driver.brake > 0 || driver.handbrake, frameDt)
@@ -213,6 +306,16 @@ if (import.meta.env.DEV) {
       return rules
     },
     editor,
+    recorder,
+    report,
+    openReport,
+    startReplay,
+    /** Run the live drive forward without waiting for frames. */
+    advance(seconds: number, driver: Partial<DriverInput> = {}) {
+      const d: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false, ...driver }
+      const steps = Math.round(seconds / FIXED_DT)
+      for (let i = 0; i < steps; i++) stepSimulation(d, FIXED_DT)
+    },
     state,
     params,
     cameraParams,

@@ -8,10 +8,13 @@ const doc = (): GraphDoc => new GraphDoc(BALLYROAD)
 
 describe('editing', () => {
   it('does not mutate the source town', () => {
+    // Counted relative to the town rather than against a literal, so adding a
+    // road to Ballyroad does not look like an editing bug.
+    const before = BALLYROAD.nodes.length
     const d = doc()
     d.addNode(10, 10)
-    expect(BALLYROAD.nodes).toHaveLength(9)
-    expect(d.nodes).toHaveLength(10)
+    expect(BALLYROAD.nodes).toHaveLength(before)
+    expect(d.nodes).toHaveLength(before + 1)
   })
 
   it('adds nodes with unique ids', () => {

@@ -7,6 +7,8 @@ export type Action =
   | 'toggleTuner'
   | 'toggleEditor'
   | 'toggleAudio'
+  | 'toggleReport'
+  | 'cancel'
   | 'reset'
 
 export interface DriverInput {
@@ -26,6 +28,8 @@ const KEY_ACTIONS: Record<string, Action> = {
   KeyT: 'toggleTuner',
   KeyE: 'toggleEditor',
   KeyM: 'toggleAudio',
+  Enter: 'toggleReport',
+  Escape: 'cancel',
   Backspace: 'reset',
 }
 
