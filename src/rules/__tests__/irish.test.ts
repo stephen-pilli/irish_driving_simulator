@@ -185,3 +185,121 @@ describe('junction control', () => {
     expect(drive.faultsOf('ie.junction.yield-approach')).toEqual([])
   })
 })
+
+describe('other road users', () => {
+  it('marks following closer than two seconds', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 40, { speedKmh: 50 })
+    // 50 km/h is 13.9 m/s, so two seconds is 27.8 m and one second is 13.9 m.
+    // Twenty metres sits between the two: serious, not dangerous.
+    drive.world = { ...drive.world, leader: () => ({ gap: 20, speed: 13.9, kind: 'car' }) }
+    drive.run(4)
+
+    const faults = drive.faultsOf('ie.traffic.following-distance')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.grade).toBe(2)
+    expect(faults[0]!.message).toContain('1.4 seconds')
+  })
+
+  it('treats under one second as dangerous', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 40, { speedKmh: 50 })
+    drive.world = { ...drive.world, leader: () => ({ gap: 6, speed: 13.9, kind: 'car' }) }
+    drive.run(4)
+    expect(drive.faultsOf('ie.traffic.following-distance')[0]!.grade).toBe(3)
+  })
+
+  it('accepts a two-second gap', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 40, { speedKmh: 50 })
+    drive.world = { ...drive.world, leader: () => ({ gap: 40, speed: 13.9, kind: 'car' }) }
+    drive.run(8)
+    expect(drive.faultsOf('ie.traffic.following-distance')).toHaveLength(0)
+  })
+
+  it('does not mark closing up in stationary traffic', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 40, { speedKmh: 4 })
+    drive.world = { ...drive.world, leader: () => ({ gap: 2, speed: 0, kind: 'car' }) }
+    drive.run(8)
+    expect(drive.faultsOf('ie.traffic.following-distance')).toHaveLength(0)
+  })
+
+  it('marks a collision as dangerous', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 40, { speedKmh: 30 })
+    drive.world = { ...drive.world, collisions: () => 1 }
+    drive.run(1)
+
+    const faults = drive.faultsOf('ie.traffic.collision')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.grade).toBe(3)
+    expect(drive.engine.verdict().passed).toBe(false)
+  })
+
+  it('marks pulling out across traffic with priority', () => {
+    const drive = new ScriptedDrive()
+    drive.place('north_link', 150, { speedKmh: 25, backwards: true })
+    drive.world = { ...drive.world, mustGiveWay: () => true }
+    drive.runUntilPast(5, 30)
+
+    const faults = drive.faultsOf('ie.junction.yield-approach')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.grade).toBe(3)
+    expect(faults[0]!.message).toContain('priority')
+  })
+
+  it('does not mark a yield junction when the road is clear', () => {
+    const drive = new ScriptedDrive()
+    drive.place('north_link', 150, { speedKmh: 25, backwards: true })
+    drive.runUntilPast(5, 30)
+    expect(drive.faultsOf('ie.junction.yield-approach')).toHaveLength(0)
+  })
+
+  it('marks driving at a pedestrian on a crossing', () => {
+    const drive = new ScriptedDrive()
+    drive.place('residential', 120, { speedKmh: 30 })
+    drive.world = {
+      ...drive.world,
+      pedestrianAhead: () => ({ distance: 9, onCrossing: true }),
+    }
+    drive.run(1)
+
+    const faults = drive.faultsOf('ie.pedestrian.crossing')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.grade).toBe(3)
+  })
+
+  it('marks not yielding to someone waiting, less severely', () => {
+    const drive = new ScriptedDrive()
+    drive.place('residential', 120, { speedKmh: 30 })
+    drive.world = {
+      ...drive.world,
+      pedestrianAhead: () => ({ distance: 9, onCrossing: false }),
+    }
+    drive.run(1)
+    expect(drive.faultsOf('ie.pedestrian.crossing')[0]!.grade).toBe(2)
+  })
+
+  it('does not mark a crossing the car can still stop short of', () => {
+    const drive = new ScriptedDrive()
+    drive.place('residential', 60, { speedKmh: 30 })
+    drive.world = {
+      ...drive.world,
+      pedestrianAhead: () => ({ distance: 38, onCrossing: true }),
+    }
+    drive.run(1)
+    expect(drive.faultsOf('ie.pedestrian.crossing')).toHaveLength(0)
+  })
+
+  it('does not mark a car already stopped at a crossing', () => {
+    const drive = new ScriptedDrive()
+    drive.place('residential', 120, { speedKmh: 0 })
+    drive.world = {
+      ...drive.world,
+      pedestrianAhead: () => ({ distance: 3, onCrossing: true }),
+    }
+    drive.run(3)
+    expect(drive.faultsOf('ie.pedestrian.crossing')).toHaveLength(0)
+  })
+})

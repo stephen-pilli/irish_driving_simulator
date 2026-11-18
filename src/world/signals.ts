@@ -84,6 +84,34 @@ export class SignalController {
     return 'red'
   }
 
+  /**
+   * Wind the cycle to a point where this approach shows the given aspect, at
+   * the START of that phase so it holds for a while. Used to set a scenario
+   * up: "approaching a red light" must actually present a red light, not
+   * whatever the cycle happens to be showing when the driver arrives.
+   */
+  forceAspect(edgeId: EdgeId, aspect: SignalAspect): boolean {
+    const saved = this.time
+    const step = 0.1
+    let found: number | null = null
+    let previous: SignalAspect | null = null
+
+    for (let t = 0; t < this.cycleSeconds; t += step) {
+      this.time = t
+      const current = this.aspectFor(edgeId)
+      if (current === aspect && previous !== aspect) {
+        found = t
+        break
+      }
+      previous = current
+    }
+
+    this.time = saved
+    if (found === null) return false
+    this.setPhaseSeconds(found)
+    return true
+  }
+
   /** Seconds until this edge's signal next changes. Useful for traffic AI. */
   secondsToChange(edgeId: EdgeId): number {
     const current = this.aspectFor(edgeId)

@@ -5,7 +5,7 @@ import { createSignals } from '../../world/signals'
 import { BALLYROAD } from '../../world/town'
 import { RulesEngine } from '../engine'
 import { irishRules } from '../irish'
-import type { Fault, Rule } from '../types'
+import type { Fault, Rule, WorldSense } from '../types'
 
 export interface PlaceOptions {
   /** Lane index, or an explicit lateral offset from the centre line. */
@@ -33,6 +33,17 @@ export class ScriptedDrive {
   private lateral = 0
   private speedMs = 0
   private backwards = false
+  /**
+   * What the car can see of other road users. A stub by default — no traffic,
+   * no pedestrians, nothing to hit — so a test only has to describe the part
+   * of the world its own rule is about.
+   */
+  world: WorldSense = {
+    leader: () => null,
+    collisions: () => 0,
+    pedestrianAhead: () => null,
+    mustGiveWay: () => false,
+  }
 
   constructor(rules: Rule[] = irishRules()) {
     this.engine = new RulesEngine(rules, this.graph, this.signals)
@@ -81,7 +92,7 @@ export class ScriptedDrive {
       this.sync()
       this.state.odometer += this.speedMs * dt
       for (const controller of this.signals.values()) controller.update(dt)
-      this.engine.update(this.state, this.input, dt)
+      this.engine.update(this.state, this.input, dt, this.world)
     }
     return this
   }

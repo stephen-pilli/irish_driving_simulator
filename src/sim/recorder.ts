@@ -46,6 +46,12 @@ export interface RecordedDrive {
   /** Car position every `pathEvery` steps, for drawing the route. */
   path: Array<[x: number, y: number]>
   pathEvery: number
+  /**
+   * Seed the traffic ran from. A replay has to rebuild the same traffic from
+   * the same seed and step it the same number of times, or the car in the
+   * replay is braking for something that is not there.
+   */
+  trafficSeed: number
 }
 
 /** How often the path is sampled. At 120 Hz this is four points a second. */
@@ -67,6 +73,7 @@ export class DriveRecorder {
   private signalPhases: Array<[NodeId, number]> = []
   private start: VehicleState = createState()
   private params: VehicleParams | null = null
+  private trafficSeed = 0
   private dt = 1 / 120
   private step = 0
   private lastGear: Gear = 'D'
@@ -84,6 +91,7 @@ export class DriveRecorder {
     params: VehicleParams,
     signals: Map<NodeId, SignalController>,
     dt: number,
+    trafficSeed = 0,
   ): void {
     this.frames = []
     this.gears = []
@@ -95,6 +103,7 @@ export class DriveRecorder {
     // recording that silently adopted the new numbers would not replay.
     this.params = { ...params }
     this.lastGear = state.gear
+    this.trafficSeed = trafficSeed
     this.signalPhases = [...signals.entries()].map(([id, c]) => [id, c.phaseSeconds])
   }
 
@@ -133,6 +142,7 @@ export class DriveRecorder {
       signalPhases: [...this.signalPhases],
       path: [...this.path],
       pathEvery: PATH_EVERY,
+      trafficSeed: this.trafficSeed,
     }
   }
 }
@@ -158,7 +168,15 @@ export class ReplaySession {
   private frameIndex = 0
   private gearIndex = 0
 
-  constructor(readonly drive: RecordedDrive) {
+  /**
+   * `onAdvance` fires for every step the session takes, during a seek as well
+   * as during playback. Traffic has to be stepped on both, or jumping to a
+   * fault shows the road empty and the car braking for nothing.
+   */
+  constructor(
+    readonly drive: RecordedDrive,
+    private readonly onAdvance?: (state: VehicleState, dt: number) => void,
+  ) {
     this.state = { ...drive.start }
   }
 
@@ -195,6 +213,7 @@ export class ReplaySession {
 
     stepVehicle(this.state, this.input, params, dt)
     this.step++
+    this.onAdvance?.(this.state, dt)
     return true
   }
 

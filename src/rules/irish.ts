@@ -254,42 +254,170 @@ export function stopJunctionRule(): Rule {
 }
 
 /**
- * Approaching a yield-controlled junction too fast to give way.
+ * Failing to yield where a yield sign applies.
  *
- * A proxy, and an honest one only until there is traffic to yield TO: with an
- * empty junction, approach speed is all that can be judged. Once P3 adds
- * traffic this should check gap acceptance instead.
+ * Until there was traffic to yield TO, this could only judge approach speed,
+ * which is a proxy and was marked as one. Now that there is, it grades the
+ * thing itself: pulling out across someone who has priority is a Grade 3,
+ * because it is the fault that causes the collision rather than the one that
+ * merely risks it. Arriving too fast to have given way if anything HAD been
+ * coming is still worth a Grade 2 — the guidelines mark the approach as well
+ * as the act.
  */
 export function yieldJunctionRule(): Rule {
   let previousDistance: number | null = null
+  let hadToGiveWay = false
   return {
     id: 'ie.junction.yield-approach',
     aspect: 'Anticipation and reaction',
     cooldown: 8,
     reset() {
       previousDistance = null
+      hadToGiveWay = false
     },
     evaluate(ctx) {
       const loc = ctx.loc
       if (!loc) {
         previousDistance = null
+        hadToGiveWay = false
         return
       }
       const line = stopLineAhead(loc, ctx.graph)
       const control = line ? junctionControl(ctx, line.nodeId) : null
-      if (!line || control?.kind !== 'yield' || !control.yieldEdges.includes(loc.edge.id)) {
+      const applies =
+        control?.kind === 'yield'
+          ? control.yieldEdges.includes(loc.edge.id)
+          : control?.kind === 'uncontrolled'
+      if (!line || !applies) {
         previousDistance = null
+        hadToGiveWay = false
         return
       }
 
-      if (previousDistance !== null && previousDistance > 0 && line.distance <= 0 && ctx.speedKmh > 30) {
-        ctx.report({
-          grade: 2,
-          message: `Entered a yield junction at ${Math.round(ctx.speedKmh)} km/h`,
-          reference: `${ROTR} — Yield signs`,
-        })
+      // Remembered on the approach: at the instant of crossing the line the
+      // other vehicle may already have had to brake out of the way, which
+      // would make the fault disappear exactly when it was committed.
+      if (line.distance > 0 && line.distance < 30 && ctx.world?.mustGiveWay()) {
+        hadToGiveWay = true
+      }
+
+      if (previousDistance !== null && previousDistance > 0 && line.distance <= 0) {
+        if (hadToGiveWay) {
+          ctx.report({
+            grade: 3,
+            message: 'Pulled out across traffic that had priority',
+            reference: `${ROTR} — Yield signs and junctions`,
+          })
+        } else if (ctx.speedKmh > 30) {
+          ctx.report({
+            grade: 2,
+            message: `Entered a yield junction at ${Math.round(ctx.speedKmh)} km/h`,
+            reference: `${ROTR} — Yield signs`,
+          })
+        }
+        hadToGiveWay = false
       }
       previousDistance = line.distance
+    },
+  }
+}
+
+/**
+ * Following too closely.
+ *
+ * Graded against the two-second rule, which is what is taught and what the
+ * marking guidelines expect to see. Two seconds of travel at the current speed
+ * is the yardstick; anything under one second is treated as dangerous rather
+ * than merely serious, since at that distance no reaction is possible at all.
+ *
+ * Below walking pace the rule stands down. Closing up in stationary traffic is
+ * normal and is not what the two-second rule is about.
+ */
+export function followingDistanceRule(): Rule {
+  let closeFor = 0
+  return {
+    id: 'ie.traffic.following-distance',
+    aspect: 'Anticipation and reaction',
+    cooldown: 10,
+    reset() {
+      closeFor = 0
+    },
+    evaluate(ctx) {
+      const speed = Math.abs(ctx.state.speed)
+      const leader = ctx.world?.leader() ?? null
+      if (!leader || speed < 3) {
+        closeFor = 0
+        return
+      }
+
+      const seconds = leader.gap / speed
+      if (seconds > 2) {
+        closeFor = Math.max(0, closeFor - ctx.dt * 2)
+        return
+      }
+
+      closeFor += ctx.dt
+      if (closeFor < 1.5) return
+      closeFor = 0
+
+      ctx.report({
+        grade: seconds < 1 ? 3 : 2,
+        message: `Following ${seconds.toFixed(1)} seconds behind the vehicle in front`,
+        reference: `${ROTR} — Safe distance`,
+      })
+    },
+  }
+}
+
+/** Hitting something. There is no gentler reading of this one. */
+export function collisionRule(): Rule {
+  return {
+    id: 'ie.traffic.collision',
+    aspect: 'Anticipation and reaction',
+    cooldown: 5,
+    evaluate(ctx) {
+      if ((ctx.world?.collisions() ?? 0) === 0) return
+      ctx.report({
+        grade: 3,
+        message: 'Collision with another road user',
+        reference: `${ROTR} — Anticipation and reaction`,
+      })
+    },
+  }
+}
+
+/**
+ * Not yielding at a pedestrian crossing.
+ *
+ * The test is whether the car could still be stopped. Judging it on speed
+ * alone would mark a driver who is already committed and braking as hard as
+ * the tyres allow, which is not a fault but the correct response to a
+ * pedestrian who stepped out late.
+ */
+export function pedestrianCrossingRule(): Rule {
+  return {
+    id: 'ie.pedestrian.crossing',
+    aspect: 'Traffic controls',
+    cooldown: 8,
+    evaluate(ctx) {
+      const speed = Math.abs(ctx.state.speed)
+      if (speed < 1.5) return
+
+      const ahead = ctx.world?.pedestrianAhead(40) ?? null
+      if (!ahead) return
+
+      // Comfortable braking, not an emergency stop: the distance in which the
+      // car SHOULD have been brought to rest by a driver who was looking.
+      const stoppingDistance = (speed * speed) / (2 * 4.5) + speed * 0.7
+      if (ahead.distance > stoppingDistance) return
+
+      ctx.report({
+        grade: ahead.onCrossing ? 3 : 2,
+        message: ahead.onCrossing
+          ? 'Did not yield to a pedestrian on a crossing'
+          : 'Did not yield to a pedestrian waiting at a crossing',
+        reference: `${ROTR} — Pedestrian crossings`,
+      })
     },
   }
 }
@@ -327,7 +455,7 @@ export function carriagewayRule(): Rule {
   }
 }
 
-/** The P1 rule set. */
+/** Every rule the engine grades against. */
 export function irishRules(): Rule[] {
   return [
     speedLimitRule(),
@@ -337,5 +465,8 @@ export function irishRules(): Rule[] {
     stopJunctionRule(),
     yieldJunctionRule(),
     carriagewayRule(),
+    followingDistanceRule(),
+    collisionRule(),
+    pedestrianCrossingRule(),
   ]
 }

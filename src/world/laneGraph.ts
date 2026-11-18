@@ -119,6 +119,8 @@ export interface EdgeSpec {
   centreLine?: CentreLine
   /** Set on generated circulatory carriageway, naming the roundabout it rings. */
   circulatoryOf?: NodeId
+  /** Arc lengths of pedestrian crossings along this road. */
+  crossings?: number[]
 }
 
 export interface LaneGraphSpec {
@@ -145,6 +147,8 @@ export interface Edge {
   halfWidth: number
   /** Set on generated circulatory carriageway, naming the roundabout it rings. */
   circulatoryOf?: NodeId
+  /** Arc lengths of pedestrian crossings along this road. */
+  crossings: number[]
   /** Lateral offset of a lane's centre. Positive is left of the centre line. */
   laneOffset(index: number): number
   /** Signed lateral span of a lane, as [nearEdge, farEdge] offsets. */
@@ -272,6 +276,7 @@ export class LaneGraph {
       lanes,
       centreLine: spec.centreLine ?? (lanes.length > 1 ? 'broken' : 'none'),
       ...(spec.circulatoryOf ? { circulatoryOf: spec.circulatoryOf } : {}),
+      crossings: (spec.crossings ?? []).filter((s) => s > 0 && s < length),
       points,
       cumulative,
       length,
@@ -637,4 +642,59 @@ export function expandRoundabouts(spec: LaneGraphSpec): LaneGraphSpec {
 /** True when this edge is part of a roundabout's circulatory carriageway. */
 export function isCirculatory(edge: Edge): boolean {
   return edge.circulatoryOf !== undefined
+}
+
+/** Travel direction along `edge` for a vehicle leaving `node`. */
+export function directionAwayFrom(edge: Edge, node: NodeId): 1 | -1 {
+  return edge.from === node ? 1 : -1
+}
+
+/**
+ * The lane a vehicle should use travelling in `direction`.
+ *
+ * Ireland drives on the left, and lanes are listed left to right along the
+ * edge, so the correct lane is the FIRST one matching the direction of travel
+ * when going with the edge and the LAST one when going against it. Picking the
+ * wrong end of the list puts traffic in the overtaking lane, or on a two-way
+ * road, into oncoming traffic.
+ */
+export function laneForTravel(edge: Edge, direction: 1 | -1, kind: LaneKind = 'general'): number {
+  const matching: number[] = []
+  for (let i = 0; i < edge.lanes.length; i++) {
+    if (edge.lanes[i]!.direction === direction) matching.push(i)
+  }
+  if (matching.length === 0) return -1
+
+  const preferred = matching.filter((i) => edge.lanes[i]!.kind === kind)
+  const usable = preferred.length ? preferred : matching.filter((i) => edge.lanes[i]!.kind === 'general')
+  const pool = usable.length ? usable : matching
+  return direction === 1 ? pool[0]! : pool[pool.length - 1]!
+}
+
+/** Edges leaving `node`, excluding the one arrived on unless it is the only one. */
+export function exitsFrom(graph: LaneGraph, node: NodeId, arrivedOn: EdgeId): EdgeId[] {
+  const n = graph.nodes.get(node)
+  if (!n) return []
+  const usable = n.edges.filter((id) => {
+    if (id === arrivedOn) return false
+    const edge = graph.edges.get(id)
+    if (!edge) return false
+    // A one-way street cannot be entered against its direction of travel.
+    return laneForTravel(edge, directionAwayFrom(edge, node)) >= 0
+  })
+  return usable.length ? usable : [arrivedOn]
+}
+
+/**
+ * Bearing of an edge's carriageway at the end that meets `node`, pointing away
+ * from the junction. Used to work out which approach is on another's right.
+ */
+export function approachBearing(edge: Edge, node: NodeId): number {
+  if (edge.from === node) {
+    const pose = sampleEdge(edge, Math.min(8, edge.length))
+    return Math.atan2(pose.y - edge.points[0]!.y, pose.x - edge.points[0]!.x)
+  }
+  const end = edge.points[edge.points.length - 1]!
+  const pose = sampleEdge(edge, Math.max(0, edge.length - 8))
+  return Math.atan2(pose.y - end.y, pose.x - end.x)
 }

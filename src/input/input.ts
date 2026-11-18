@@ -8,6 +8,7 @@ export type Action =
   | 'toggleEditor'
   | 'toggleAudio'
   | 'toggleReport'
+  | 'toggleScenarios'
   | 'cancel'
   | 'reset'
 
@@ -28,6 +29,7 @@ const KEY_ACTIONS: Record<string, Action> = {
   KeyT: 'toggleTuner',
   KeyE: 'toggleEditor',
   KeyM: 'toggleAudio',
+  KeyP: 'toggleScenarios',
   Enter: 'toggleReport',
   Escape: 'cancel',
   Backspace: 'reset',

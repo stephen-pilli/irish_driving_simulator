@@ -62,6 +62,26 @@ export interface FaultSpec {
   reference?: string
 }
 
+/**
+ * What the rules are allowed to know about the world beyond the road layout.
+ *
+ * An interface rather than a reference to the traffic system, for two reasons.
+ * The rules stay testable against a stub, with no traffic model to set up and
+ * no dependence on how it happens to behave today. And it stays explicit what
+ * a rule may ask: everything here is something a driver could perceive from
+ * the driving seat, which is the standard the marking guidelines apply.
+ */
+export interface WorldSense {
+  /** The nearest road user ahead in the driver's own lane. */
+  leader(): { gap: number; speed: number; kind: string } | null
+  /** Road users currently in contact with the car. */
+  collisions(): number
+  /** Someone on or waiting at a crossing ahead, and how far off it is. */
+  pedestrianAhead(within: number): { distance: number; onCrossing: boolean } | null
+  /** Traffic with priority is close enough at the junction being approached. */
+  mustGiveWay(): boolean
+}
+
 export interface RuleContext {
   state: Readonly<VehicleState>
   input: Readonly<DriverInput>
@@ -73,6 +93,8 @@ export interface RuleContext {
   t: number
   dt: number
   speedKmh: number
+  /** Null when the drive is running with no other road users. */
+  world: WorldSense | null
   /** Report a fault. The engine applies the cooldown and double-marking rules. */
   report(spec: FaultSpec): void
 }

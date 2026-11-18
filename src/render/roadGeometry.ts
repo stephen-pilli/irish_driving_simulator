@@ -185,6 +185,29 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
     }
   }
 
+  // Pedestrian crossings. The bars of a zebra run ALONG the direction of
+  // traffic, not across it — you step over them rather than along them.
+  for (const edge of graph.edges.values()) {
+    for (const crossing of edge.crossings) {
+      const halfLength = 1.6
+      const barWidth = 0.5
+      const span = edge.halfWidth - 0.3
+      for (let offset = -span; offset < span - barWidth; offset += barWidth * 2) {
+        const bar = ribbon(
+          edge,
+          crossing - halfLength,
+          crossing + halfLength,
+          offset + barWidth,
+          offset,
+          PAINT_Y,
+          6,
+          0.8,
+        )
+        if (bar) paintParts.push(bar)
+      }
+    }
+  }
+
   // Junction surfaces, and the stop lines on their approaches.
   for (const node of graph.nodes.values()) {
     const junction = node.junction

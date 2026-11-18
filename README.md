@@ -6,11 +6,17 @@ broke, graded the way the RSA driving test grades faults.
 
 Runs entirely in the browser. No backend, no install, works offline.
 
-## Status: P1 — the town and the first rules
+## Status: P3 — traffic, scenarios and the post-drive report
 
-Drive around a small Irish town and get marked on it. Speed limits, road
-position, continuous white lines, traffic lights, stop signs and yields are all
+Drive around a small Irish town, with other traffic, and get marked on it.
+Speed limits, road position, continuous white lines, traffic lights, stop
+signs, yields, following distance, collisions and pedestrian crossings are all
 enforced, and faults are graded the way the RSA grades them.
+
+Press **Enter** for the post-drive report, where every fault can be replayed
+from the driver's seat, and **P** for the practice library: eight set-piece
+situations — a yield junction, a roundabout, a pedestrian crossing, a cyclist
+on a road you cannot overtake on — each the same every time you try it.
 
 ```bash
 npm install
@@ -187,21 +193,25 @@ rules themselves, and the editor's document and hit testing.
 - **P1 — world and first rules.** Lane graph, procedural geometry, junctions,
   traffic lights, the rules engine and the first seven Irish rules.
 - **P2 — the report.** Post-drive report screen with a fault timeline,
-  deterministic replay, and roundabouts.
+  deterministic replay, and roundabouts. *Done.*
 - **P3 — traffic.** IDM traffic, junction priority, pedestrians and cyclists,
-  and the corner-case scenario library.
+  and the corner-case scenario library. *Done.*
 - **P4 — test mode.** Manoeuvres (turnabout, reversing around a corner, hill
   start), a full route with examiner voice prompts, pass/fail verdict.
 - **P5 — polish.** Blender art pass, mirrors, night and rain, touch controls.
 
 ### Known gaps
 
-- **No traffic.** Nothing else moves, which limits several rules: the yield rule
-  can only judge approach speed, because there is nothing to yield to. It is
-  marked in the source as a proxy to be replaced in P3.
 - **The editor cannot place signs or road furniture**, only roads and junction
-  control. Yellow boxes, bus lanes and crossings have no representation yet.
-- **No collision detection.** You can still drive through buildings.
+  control. Yellow boxes and bus lanes have no representation yet, and pedestrian
+  crossings can be authored in the town file but not drawn in the editor.
+- **Collisions are detected against other road users only.** You can still
+  drive through buildings, and the traffic drives through you rather than being
+  dented by you.
+- **Traffic does not overtake or change lanes.** It follows, gives way and
+  turns; a cyclist on a single-lane road will be sat behind rather than passed.
+- **No manoeuvres and no examiner.** The turnabout, reversing around a corner
+  and the hill start are P4, as is a routed test with spoken directions.
 - **No observation rules.** Mirror and blind-spot checks need mirrors and a
   glance input, which is P5 work, and they are a large part of the real test.
 - **Speed limit rollout.** Rural local roads are correct at 60 km/h. The urban

@@ -16,6 +16,7 @@ import { generalLane, twoWay, type LaneGraphSpec } from './laneGraph'
  *  - a continuous white centre line on the southern road, where overtaking
  *    must not happen
  *  - a three-arm roundabout in the north-east corner
+ *  - pedestrian crossings on the main street and the residential road
  */
 export const BALLYROAD: LaneGraphSpec = {
   nodes: [
@@ -81,6 +82,7 @@ export const BALLYROAD: LaneGraphSpec = {
       category: 'urban',
       lanes: twoWay(),
       centreLine: 'broken',
+      crossings: [250],
     },
     {
       id: 'main_e',
@@ -97,6 +99,9 @@ export const BALLYROAD: LaneGraphSpec = {
       category: 'urbanCore',
       lanes: twoWay(3.1),
       centreLine: 'broken',
+      // Two crossings on the residential street, which is where a 30 km/h
+      // limit and people on foot are supposed to go together.
+      crossings: [70, 165],
     },
     {
       id: 'town_south',

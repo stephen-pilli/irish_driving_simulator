@@ -2,7 +2,7 @@ import type { DriverInput } from '../input/input'
 import type { VehicleState } from '../sim/vehicle'
 import type { LaneGraph, NodeId } from '../world/laneGraph'
 import type { SignalController } from '../world/signals'
-import type { Aspect, AspectTally, Fault, Rule, RuleContext, Verdict } from './types'
+import type { Aspect, AspectTally, Fault, Rule, RuleContext, Verdict, WorldSense } from './types'
 
 /**
  * Failure thresholds from the RSA marking guidelines. A test is failed by any
@@ -43,7 +43,12 @@ export class RulesEngine {
     for (const rule of this.rules) rule.reset?.()
   }
 
-  update(state: VehicleState, input: DriverInput, dt: number): void {
+  update(
+    state: VehicleState,
+    input: DriverInput,
+    dt: number,
+    world: WorldSense | null = null,
+  ): void {
     this.elapsed += dt
     const loc = this.graph.locate(state.x, state.y, state.heading)
     const speedKmh = Math.abs(state.speed) * 3.6
@@ -65,6 +70,7 @@ export class RulesEngine {
         t: this.elapsed,
         dt,
         speedKmh,
+        world,
         report: (spec) => {
           if (onCooldown) return
           pending.push({

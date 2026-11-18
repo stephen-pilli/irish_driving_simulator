@@ -14,14 +14,20 @@ import {
   type VehicleState,
 } from './sim/vehicle'
 import { DriveRecorder, ReplaySession, restoreSignalPhases } from './sim/recorder'
+import { PedestrianSystem } from './sim/pedestrians'
+import { DEFAULT_TRAFFIC, TrafficSystem, type PlayerObstacle } from './sim/traffic'
+import { TrafficView } from './render/traffic'
 import { EngineAudio } from './ui/audio'
 import { Hud } from './ui/hud'
 import { Report } from './ui/report'
+import { ScenarioMenu } from './ui/scenarioMenu'
+import { SCENARIOS, type Scenario, type ScenarioWorld } from './scenarios/scenarios'
 import { RulesEngine } from './rules/engine'
+import type { WorldSense } from './rules/types'
 import { irishRules } from './rules/irish'
 import { Tuner } from './ui/tuner'
 import { CAMERA_FIELDS, VEHICLE_FIELDS } from './ui/tuningFields'
-import { edgePoint, LaneGraph, sampleEdge } from './world/laneGraph'
+import { edgePoint, LaneGraph, laneForTravel, sampleEdge } from './world/laneGraph'
 import { RoadEditor } from './editor/editor'
 import { createSignals } from './world/signals'
 import { BALLYROAD, START } from './world/town'
@@ -47,16 +53,26 @@ const hud = new Hud(hudRoot)
 const audio = new EngineAudio()
 let rules = new RulesEngine(irishRules(), graph, signals)
 
+let traffic = new TrafficSystem(graph, signals, DEFAULT_TRAFFIC)
+let pedestrians = new PedestrianSystem(graph)
+const trafficView = new TrafficView(DEFAULT_TRAFFIC.population + 8)
+
 const recorder = new DriveRecorder()
 /** Non-null while a recorded drive is being played back instead of driven. */
 let replay: ReplaySession | null = null
 /** The live drive, parked while a replay borrows the car. */
 let liveState: VehicleState | null = null
+let liveTraffic: TrafficSystem | null = null
+let livePedestrians: PedestrianSystem | null = null
+let replayTraffic: TrafficSystem | null = null
+let replayPedestrians: PedestrianSystem | null = null
 
 let car = new CarView(params)
 world.scene.add(car.group)
+world.scene.add(trafficView.group)
 
 const state: VehicleState = createState()
+let trafficSeed = DEFAULT_TRAFFIC.seed
 reset()
 
 const report = new Report(document.getElementById('report') as HTMLElement, {
@@ -68,6 +84,17 @@ const report = new Report(document.getElementById('report') as HTMLElement, {
     reset()
   },
 })
+
+const scenarioMenu = new ScenarioMenu(
+  document.getElementById('scenarios') as HTMLElement,
+  document.getElementById('brief') as HTMLElement,
+  SCENARIOS,
+  {
+    start: (chosen) => startScenario(chosen),
+    freeDrive: () => startScenario(null),
+    close: () => scenarioMenu.hide(),
+  },
+)
 
 const tuner = new Tuner(tunerRoot, () => {
   // Changing the wheelbase changes the model, so rebuild the view in place.
@@ -104,6 +131,10 @@ const editor = new RoadEditor(
       signals = createSignals(graph)
       rules = new RulesEngine(irishRules(), graph, signals)
       world.setGraph(graph)
+      // The traffic is positioned on roads that may no longer exist.
+      stopReplay()
+      traffic = new TrafficSystem(graph, signals, { ...DEFAULT_TRAFFIC, seed: trafficSeed })
+      pedestrians = new PedestrianSystem(graph, trafficSeed ^ 0x5f3759df)
       // The car may now be standing somewhere that is no longer a road.
       if (!graph.locate(state.x, state.y, state.heading)) reset()
     },
@@ -127,7 +158,67 @@ function reset(): void {
   const pose = sampleEdge(edge, s)
   Object.assign(state, createState(p.x, p.y, pose.heading))
   rules.reset()
-  recorder.begin(state, params, signals, FIXED_DT)
+  // A fresh seed per drive, so the traffic is reproducible within a drive but
+  // not identical between drives — the same junction twice should not be the
+  // same problem twice.
+  trafficSeed = (trafficSeed * 1664525 + 1013904223) >>> 0
+  traffic = new TrafficSystem(graph, signals, { ...DEFAULT_TRAFFIC, seed: trafficSeed })
+  traffic.clearAround(state.x, state.y, 28)
+  pedestrians = new PedestrianSystem(graph, trafficSeed ^ 0x5f3759df)
+  recorder.begin(state, params, signals, FIXED_DT, trafficSeed)
+}
+
+/** The scenario being practised, or null for an ordinary drive round the town. */
+let scenario: Scenario | null = null
+
+/**
+ * The handle a scenario is given on the world. Deliberately narrow: a scenario
+ * says what the situation IS, and nothing about how the simulation runs.
+ */
+function scenarioWorld(): ScenarioWorld {
+  return {
+    graph,
+    traffic,
+    pedestrians,
+    signals,
+    placeCar(edgeId, s, options = {}) {
+      const edge = graph.edges.get(edgeId)
+      if (!edge) return
+      const backwards = options.backwards ?? false
+      const lane = backwards ? edge.lanes.length - 1 : 0
+      const at = Math.max(0, Math.min(edge.length, s))
+      const p = edgePoint(edge, at, edge.laneOffset(lane))
+      const pose = sampleEdge(edge, at)
+      Object.assign(state, createState(p.x, p.y, pose.heading + (backwards ? Math.PI : 0)))
+      state.speed = (options.speedKmh ?? 0) / 3.6
+    },
+    add(kind, edgeId, direction, s, speedKmh) {
+      traffic.spawn(kind, edgeId, direction, s, speedKmh / 3.6)
+    },
+    setSignal(nodeId, edgeId, aspect) {
+      signals.get(nodeId)?.forceAspect(edgeId, aspect)
+    },
+    setPedestrian(edgeId, s, pedestrianState) {
+      pedestrians.force(graph, edgeId, s, pedestrianState)
+    },
+  }
+}
+
+function startScenario(next: Scenario | null): void {
+  stopReplay()
+  report.hide()
+  scenarioMenu.hide()
+  scenario = next
+
+  reset()
+  if (next) {
+    next.setUp(scenarioWorld())
+    // The car has just been moved, so the recording has to start from where it
+    // actually is rather than from wherever reset() left it.
+    rules.reset()
+    recorder.begin(state, params, signals, FIXED_DT, trafficSeed)
+  }
+  scenarioMenu.showBrief(next)
 }
 
 /**
@@ -137,18 +228,44 @@ function reset(): void {
 function startReplay(seconds: number): void {
   const drive = recorder.finish()
   if (!drive) return
-  if (!replay) liveState = { ...state }
+  if (!replay) {
+    liveState = { ...state }
+    liveTraffic = traffic
+    livePedestrians = pedestrians
+  }
 
-  replay = new ReplaySession(drive)
+  // The replay gets its own traffic, rebuilt from the seed the drive ran with
+  // and stepped alongside the car from the very beginning — including through
+  // the seek. Anything less and the car brakes for vehicles that are not there.
+  replayTraffic = new TrafficSystem(graph, signals, { ...DEFAULT_TRAFFIC, seed: drive.trafficSeed })
+  // Cleared around the same point as the live drive was, or the replay starts
+  // with vehicles the drive never had.
+  replayTraffic.clearAround(drive.start.x, drive.start.y, 28)
+  replayPedestrians = new PedestrianSystem(graph, drive.trafficSeed ^ 0x5f3759df)
+  restoreSignalPhases(drive, signals, 0)
+
+  replay = new ReplaySession(drive, (replayedState, dt) => {
+    if (replayTraffic && replayPedestrians) {
+      stepWorld(replayTraffic, replayPedestrians, replayedState, dt)
+    }
+  })
   replay.seek(seconds)
   restoreSignalPhases(drive, signals, seconds)
   Object.assign(state, replay.state)
+  if (replayTraffic) traffic = replayTraffic
+  if (replayPedestrians) pedestrians = replayPedestrians
   report.hide()
 }
 
 function stopReplay(): void {
   if (!replay) return
   replay = null
+  replayTraffic = null
+  replayPedestrians = null
+  if (liveTraffic) traffic = liveTraffic
+  if (livePedestrians) pedestrians = livePedestrians
+  liveTraffic = null
+  livePedestrians = null
   if (liveState) {
     Object.assign(state, liveState)
     liveState = null
@@ -161,6 +278,80 @@ function openReport(): void {
 }
 
 /**
+ * The player, described the way the traffic model describes its own vehicles.
+ * Returns null when the car is nowhere near a road, in which case the traffic
+ * simply cannot see it — which is the honest answer.
+ */
+function playerObstacle(state: VehicleState): PlayerObstacle | null {
+  const loc = graph.locate(state.x, state.y, state.heading)
+  if (!loc) return null
+  const direction: 1 | -1 = loc.withEdge ? 1 : -1
+  const laneIndex = laneForTravel(loc.edge, direction)
+  return {
+    x: state.x,
+    y: state.y,
+    heading: state.heading,
+    speed: state.speed,
+    length: 4.2,
+    width: 1.8,
+    edgeId: loc.edge.id,
+    direction,
+    laneIndex: laneIndex >= 0 ? laneIndex : loc.laneIndex,
+    s: loc.s,
+  }
+}
+
+/**
+ * What the rules are allowed to perceive. Built fresh each step from the live
+ * traffic, so a rule can never hold on to a road user that has since moved on.
+ */
+function senses(
+  state: VehicleState,
+  trafficSystem: TrafficSystem,
+  pedestrianSystem: PedestrianSystem,
+): WorldSense | null {
+  const player = playerObstacle(state)
+  if (!player) return null
+
+  return {
+    leader: () => trafficSystem.leaderForPlayer(player),
+    collisions: () => trafficSystem.collisionsWith(player).length,
+    pedestrianAhead: (within) => {
+      const edge = graph.edge(player.edgeId)
+      let nearest: { distance: number; onCrossing: boolean } | null = null
+      for (const crossing of edge.crossings) {
+        const distance =
+          player.direction === 1 ? crossing - player.s : player.s - crossing
+        if (distance < 0 || distance > within) continue
+        if (!pedestrianSystem.activeAt(edge.id, crossing)) continue
+        const onCrossing = pedestrianSystem.people.some(
+          (p) => p.edgeId === edge.id && p.s === crossing && p.state === 'crossing',
+        )
+        if (!nearest || distance < nearest.distance) nearest = { distance, onCrossing }
+      }
+      return nearest
+    },
+    mustGiveWay: () => {
+      const loc = graph.locate(state.x, state.y, state.heading)
+      if (!loc) return false
+      // Anyone with priority heading for the same junction, close enough that
+      // pulling out in front of them would make them brake.
+      for (const user of trafficSystem.users) {
+        if (user.edgeId === player.edgeId) continue
+        const userEdge = graph.edge(user.edgeId)
+        const userAhead = user.direction === 1 ? userEdge.to : userEdge.from
+        if (userAhead !== loc.aheadNode) continue
+        const distance =
+          user.direction === 1 ? userEdge.length - user.s : user.s
+        if (distance / Math.max(user.speed, 1.5) < 4) return true
+        if (user.inJunction) return true
+      }
+      return false
+    },
+  }
+}
+
+/**
  * One step of the live drive. Factored out of the loop so that the dev hook
  * can advance the simulation without a frame — otherwise the only way to reach
  * a situation worth looking at is to sit there driving to it in real time.
@@ -170,7 +361,20 @@ function stepSimulation(driver: DriverInput, dt: number): void {
   recorder.record(driver, state)
   stepVehicle(state, driver, params, dt)
   for (const controller of signals.values()) controller.update(dt)
-  rules.update(state, driver, dt)
+  stepWorld(traffic, pedestrians, state, dt)
+  rules.update(state, driver, dt, senses(state, traffic, pedestrians))
+}
+
+/** Advance the other road users around a given car. */
+function stepWorld(
+  trafficSystem: TrafficSystem,
+  pedestrianSystem: PedestrianSystem,
+  around: VehicleState,
+  dt: number,
+): void {
+  pedestrianSystem.update(graph, dt)
+  trafficSystem.setBlockages(pedestrianSystem.blockages())
+  trafficSystem.update(dt, playerObstacle(around))
 }
 
 function handleActions(): void {
@@ -194,19 +398,27 @@ function handleActions(): void {
       case 'toggleAudio':
         audio.toggle()
         break
+      case 'toggleScenarios':
+        if (scenarioMenu.isOpen) scenarioMenu.hide()
+        else {
+          report.hide()
+          stopReplay()
+          scenarioMenu.toggle()
+        }
+        break
       case 'toggleReport':
         if (report.isOpen) report.hide()
         else openReport()
         break
       case 'cancel':
-        if (replay) stopReplay()
+        if (scenarioMenu.isOpen) scenarioMenu.hide()
+        else if (replay) stopReplay()
         else if (report.isOpen) report.hide()
         else if (editor.isOpen) editor.toggle()
         break
       case 'reset':
-        stopReplay()
-        report.hide()
-        reset()
+        // Restarts the scenario being practised, not the whole town drive.
+        startScenario(scenario)
         break
     }
   }
@@ -222,7 +434,7 @@ window.addEventListener('resize', () => {
 const loop = startLoop({
   fixedDt: FIXED_DT,
   update(dt) {
-    if (editor.isOpen || report.isOpen) return
+    if (editor.isOpen || report.isOpen || scenarioMenu.isOpen) return
 
     if (replay) {
       // A replay is the recorded drive re-run, not a video: the same vehicle
@@ -236,12 +448,13 @@ const loop = startLoop({
       return
     }
 
+
     stepSimulation(input.sample(), dt)
   },
   render(frameDt) {
     handleActions()
-    // The editor and the report both cover the viewport.
-    if (editor.isOpen || report.isOpen) return
+    // The editor, the report and the scenario list all cover the viewport.
+    if (editor.isOpen || report.isOpen || scenarioMenu.isOpen) return
     const driver = replay ? replay.input : input.driver
 
     replayBanner.hidden = !replay
@@ -261,6 +474,8 @@ const loop = startLoop({
       const controller = signals.get(head.nodeId)
       if (controller) applyAspect(head, controller.aspectFor(head.edgeId))
     }
+    trafficView.update(traffic)
+    trafficView.updatePedestrians(pedestrians.people)
     audio.update(msToKmh(state.speed), driver.throttle)
 
     const located = graph.locate(state.x, state.y, state.heading)
@@ -306,6 +521,17 @@ if (import.meta.env.DEV) {
       return rules
     },
     editor,
+    scenarioMenu,
+    startScenario,
+    get scenario() {
+      return scenario
+    },
+    get traffic() {
+      return traffic
+    },
+    get pedestrians() {
+      return pedestrians
+    },
     recorder,
     report,
     openReport,
