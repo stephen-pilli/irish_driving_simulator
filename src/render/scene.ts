@@ -93,6 +93,7 @@ export class World {
   signalHeads: SignalHead[] = []
   graph: LaneGraph
   private townGroup: THREE.Group | null = null
+  private groundMesh: THREE.Mesh | null = null
   private roadsideGroup: THREE.Group | null = null
   private readonly tarmac: THREE.Material
   private readonly paint: THREE.Material
@@ -125,8 +126,6 @@ export class World {
     this.sun.shadow.bias = -0.0008
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
-
-    this.buildGround()
 
     const tarmacTex = tarmacTexture()
     tarmacTex.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
@@ -187,18 +186,77 @@ export class World {
 
     this.roadsideGroup = this.buildRoadside()
     this.scene.add(this.roadsideGroup)
+
+    this.buildGround()
   }
 
+  /**
+   * The ground, as a mesh that follows the roads.
+   *
+   * It used to be one flat plane, which was fine while every road was at sea
+   * level. The moment a road climbs, a flat field leaves it floating on a
+   * ribbon of tarmac in mid-air, so the ground is now sampled from the lane
+   * graph: level with the carriageway alongside it, easing back to the datum
+   * further out.
+   *
+   * Sized to the town rather than to the horizon. A grid big enough to reach
+   * the far plane at a useful resolution would be hundreds of thousands of
+   * vertices for scenery nobody looks at.
+   */
   private buildGround(): void {
+    if (this.groundMesh) {
+      this.scene.remove(this.groundMesh)
+      this.groundMesh.geometry.dispose()
+    }
+
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+    for (const edge of this.graph.edges.values()) {
+      for (const point of edge.points) {
+        minX = Math.min(minX, point.x)
+        maxX = Math.max(maxX, point.x)
+        minY = Math.min(minY, point.y)
+        maxY = Math.max(maxY, point.y)
+      }
+    }
+    if (!Number.isFinite(minX)) {
+      minX = maxX = minY = maxY = 0
+    }
+
+    const margin = 900
+    const width = maxX - minX + margin * 2
+    const depth = maxY - minY + margin * 2
+    const step = 12
+    const cols = Math.max(2, Math.round(width / step))
+    const rows = Math.max(2, Math.round(depth / step))
+
+    const geo = new THREE.PlaneGeometry(width, depth, cols, rows)
+    geo.rotateX(-Math.PI / 2)
+    geo.translate((minX + maxX) / 2, -0.02, -(minY + maxY) / 2)
+
+    const position = geo.getAttribute('position')
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i)
+      // Render Z is the negated simulation Y.
+      const y = -position.getZ(i)
+      position.setY(i, this.graph.terrainElevation(x, y) - 0.02)
+    }
+    geo.computeVertexNormals()
+
+    const uv = geo.getAttribute('uv')
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, (uv.getX(i) * width) / 8, (uv.getY(i) * depth) / 8)
+    }
+
     const tex = noiseTexture([92, 124, 74], 26)
-    tex.repeat.set(500, 500)
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(4000, 4000),
+      geo,
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1 }),
     )
-    ground.rotation.x = -Math.PI / 2
-    ground.position.y = -0.02
     ground.receiveShadow = true
+    this.groundMesh = ground
     this.scene.add(ground)
   }
 
@@ -252,6 +310,8 @@ export class World {
 
       for (let s = from; s < to; s += step) {
         const pose = sampleEdge(edge, s + step / 2)
+        // Everything roadside stands on the road's own ground, not on the datum.
+        const ground = edge.elevationAt(s + step / 2)
         for (const side of [1, -1]) {
           if (builtUp) {
             if (rand() < 0.22 || bi >= buildings.count) continue
@@ -259,7 +319,7 @@ export class World {
             const depth = 7 + rand() * 4
             const height = 4.5 + rand() * 4.5
             const p = edgePoint(edge, s + step / 2, side * (edge.halfWidth + 3 + depth / 2))
-            dummy.position.set(p.x, height / 2, -p.y)
+            dummy.position.set(p.x, ground + height / 2, -p.y)
             dummy.rotation.set(0, pose.heading, 0)
             dummy.scale.set(width, height, depth)
             dummy.updateMatrix()
@@ -270,7 +330,7 @@ export class World {
             if (rand() < 0.16 || hi >= hedges.count) continue
             const height = 0.9 + rand() * 0.7
             const p = edgePoint(edge, s + step / 2, side * (edge.halfWidth + 2.4))
-            dummy.position.set(p.x, height / 2, -p.y)
+            dummy.position.set(p.x, ground + height / 2, -p.y)
             dummy.rotation.set(0, pose.heading, 0)
             dummy.scale.set(step + 0.4, height, 1.2)
             dummy.updateMatrix()
@@ -285,10 +345,10 @@ export class World {
           const scale = 0.75 + rand() * 0.6
           dummy.rotation.set(0, rand() * Math.PI * 2, 0)
           dummy.scale.setScalar(scale)
-          dummy.position.set(p.x, 1.5 * scale, -p.y)
+          dummy.position.set(p.x, edge.elevationAt(s) + 1.5 * scale, -p.y)
           dummy.updateMatrix()
           trunks.setMatrixAt(ti, dummy.matrix)
-          dummy.position.set(p.x, 5.6 * scale, -p.y)
+          dummy.position.set(p.x, edge.elevationAt(s) + 5.6 * scale, -p.y)
           dummy.updateMatrix()
           canopies.setMatrixAt(ti, dummy.matrix)
           ti++
@@ -303,13 +363,14 @@ export class World {
       if (!node.island) continue
       const r = node.island.radius
 
+      const islandGround = node.z ?? 0
       if (ti < trunks.count) {
-        dummy.position.set(node.x, 1.5, -node.y)
+        dummy.position.set(node.x, islandGround + 1.5, -node.y)
         dummy.rotation.set(0, rand() * Math.PI, 0)
         dummy.scale.setScalar(1.15)
         dummy.updateMatrix()
         trunks.setMatrixAt(ti, dummy.matrix)
-        dummy.position.y = 5.6
+        dummy.position.y = islandGround + 5.6
         dummy.updateMatrix()
         canopies.setMatrixAt(ti, dummy.matrix)
         ti++
@@ -319,7 +380,11 @@ export class World {
       for (let i = 0; i < count && hi < hedges.count; i++) {
         const angle = (i / count) * Math.PI * 2
         const ring = r * 0.62
-        dummy.position.set(node.x + Math.cos(angle) * ring, 0.4, -(node.y + Math.sin(angle) * ring))
+        dummy.position.set(
+          node.x + Math.cos(angle) * ring,
+          islandGround + 0.4,
+          -(node.y + Math.sin(angle) * ring),
+        )
         dummy.rotation.set(0, -angle, 0)
         dummy.scale.set(1.6, 0.8, 1.6)
         dummy.updateMatrix()

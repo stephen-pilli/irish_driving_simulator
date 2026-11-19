@@ -19,7 +19,13 @@ export interface RoadMaterials {
   verge: THREE.Material
 }
 
-/** Flat ribbon between two lateral offsets, over an arc-length span. */
+/**
+ * Ribbon between two lateral offsets, over an arc-length span.
+ *
+ * `height` is the clearance ABOVE the carriageway, not an absolute altitude:
+ * the road itself follows the gradient between its two ends, and markings have
+ * to ride on top of it rather than hovering over a hill at a fixed height.
+ */
 function ribbon(
   edge: Edge,
   fromS: number,
@@ -44,7 +50,8 @@ function ribbon(
     const s = fromS + (span * i) / segments
     const a = edgePoint(edge, s, offsetA)
     const b = edgePoint(edge, s, offsetB)
-    positions.push(a.x, height, -a.y, b.x, height, -b.y)
+    const y = edge.elevationAt(s) + height
+    positions.push(a.x, y, -a.y, b.x, y, -b.y)
     normals.push(0, 1, 0, 0, 1, 0)
     const u = s / uvTile
     uvs.push(u, 0, u, vSpan)
@@ -215,7 +222,7 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
 
     const disc = new THREE.CircleGeometry(junction.radius + 1.5, 28)
     disc.rotateX(-Math.PI / 2)
-    disc.translate(node.x, JUNCTION_Y, -node.y)
+    disc.translate(node.x, (node.z ?? 0) + JUNCTION_Y, -node.y)
     // CircleGeometry's UVs are 0..1 across the disc; rescale so the surface
     // matches the roads it joins rather than stretching one tile over it.
     const uv = disc.getAttribute('uv')
@@ -267,7 +274,7 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
     // apart, and at any distance the depth buffer picked the wrong one, so the
     // island rendered as a grey slab instead of as planting.
     const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.18, 40), materials.verge)
-    body.position.set(node.x, 0.09, -node.y)
+    body.position.set(node.x, (node.z ?? 0) + 0.09, -node.y)
     body.receiveShadow = true
     group.add(body)
 
@@ -275,7 +282,7 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
       new THREE.CylinderGeometry(r + 0.02, r + 0.02, 0.2, 40, 1, true),
       new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.9, side: THREE.DoubleSide }),
     )
-    kerb.position.set(node.x, 0.1, -node.y)
+    kerb.position.set(node.x, (node.z ?? 0) + 0.1, -node.y)
     kerb.castShadow = true
     group.add(kerb)
   }
@@ -302,7 +309,7 @@ function createSignalHead(
   const pose = sampleEdge(edge, s)
 
   const pole = new THREE.Group()
-  pole.position.set(p.x, 0, -p.y)
+  pole.position.set(p.x, edge.elevationAt(s), -p.y)
   // Face the oncoming driver.
   pole.rotation.y = pose.heading + (atEnd ? Math.PI : 0)
 

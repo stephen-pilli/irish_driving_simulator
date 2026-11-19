@@ -632,3 +632,42 @@ html, body {
 .scenario-row strong { font-weight: 600; }
 .scenario-row p { margin: 4px 0 5px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .scenario-row em { font-style: normal; font-size: 11px; color: var(--accent); opacity: 0.8; }
+
+#brief b[data-progress] {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--edge);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+#brief b[data-progress].complete { color: var(--accent); }
+
+/* ---- Examiner directions ---- */
+#examiner {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 14;
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  max-width: 540px;
+  padding: 12px 22px;
+  border-radius: 14px;
+  background: rgba(14, 18, 24, 0.9);
+  border: 1px solid var(--edge);
+  backdrop-filter: blur(8px);
+  text-align: center;
+  transition: opacity 0.35s ease;
+}
+#examiner[hidden] { display: none; }
+#examiner.faded { opacity: 0.35; }
+#examiner b { font-size: 15px; font-weight: 500; }
+#examiner small {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

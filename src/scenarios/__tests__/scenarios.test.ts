@@ -47,6 +47,9 @@ function harness(): Harness {
     setSignal(nodeId, edgeId, aspect) {
       signals.get(nodeId)?.forceAspect(edgeId, aspect)
     },
+    holdOnParkBrake() {
+      state.parkBrake = true
+    },
     setPedestrian(edgeId, s, pedestrianState) {
       pedestrians.force(graph, edgeId, s, pedestrianState)
     },

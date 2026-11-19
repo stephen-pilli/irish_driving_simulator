@@ -22,6 +22,14 @@ import { Hud } from './ui/hud'
 import { Report } from './ui/report'
 import { ScenarioMenu } from './ui/scenarioMenu'
 import { SCENARIOS, type Scenario, type ScenarioWorld } from './scenarios/scenarios'
+import { Examiner } from './exam/examiner'
+import {
+  MANOEUVRES,
+  manoeuvreRule,
+  type Exercise,
+  type ExerciseOutcome,
+  type ManoeuvreScenario,
+} from './scenarios/manoeuvres'
 import { RulesEngine } from './rules/engine'
 import type { WorldSense } from './rules/types'
 import { irishRules } from './rules/irish'
@@ -51,7 +59,23 @@ const rig = new CameraRig(window.innerWidth / window.innerHeight, cameraParams)
 const input = new Input()
 const hud = new Hud(hudRoot)
 const audio = new EngineAudio()
-let rules = new RulesEngine(irishRules(), graph, signals)
+/** The manoeuvre being graded, if the current scenario is one. */
+let exercise: Exercise | null = null
+let exerciseOutcome: ExerciseOutcome = 'inProgress'
+
+function ruleSet(): ReturnType<typeof irishRules> {
+  return [
+    ...irishRules(),
+    manoeuvreRule(
+      () => exercise,
+      (outcome) => {
+        exerciseOutcome = outcome
+      },
+    ),
+  ]
+}
+
+let rules = new RulesEngine(ruleSet(), graph, signals)
 
 let traffic = new TrafficSystem(graph, signals, DEFAULT_TRAFFIC)
 let pedestrians = new PedestrianSystem(graph)
@@ -88,9 +112,10 @@ const report = new Report(document.getElementById('report') as HTMLElement, {
 const scenarioMenu = new ScenarioMenu(
   document.getElementById('scenarios') as HTMLElement,
   document.getElementById('brief') as HTMLElement,
-  SCENARIOS,
+  [...SCENARIOS, ...MANOEUVRES],
   {
     start: (chosen) => startScenario(chosen),
+    startTest: () => startTest(),
     freeDrive: () => startScenario(null),
     close: () => scenarioMenu.hide(),
   },
@@ -129,7 +154,7 @@ const editor = new RoadEditor(
     apply(spec) {
       graph = new LaneGraph(spec)
       signals = createSignals(graph)
-      rules = new RulesEngine(irishRules(), graph, signals)
+      rules = new RulesEngine(ruleSet(), graph, signals)
       world.setGraph(graph)
       // The traffic is positioned on roads that may no longer exist.
       stopReplay()
@@ -170,6 +195,29 @@ function reset(): void {
 
 /** The scenario being practised, or null for an ordinary drive round the town. */
 let scenario: Scenario | null = null
+/** The examiner, while a routed test is running. */
+let examiner: Examiner | null = null
+const examinerPanel = document.getElementById('examiner') as HTMLElement
+
+/**
+ * Begin a routed test: traffic as usual, directions from the examiner, and
+ * the report thrown up automatically at the end of the route rather than when
+ * the driver asks for it.
+ */
+function startTest(): void {
+  startScenario(null)
+  const edge = graph.edges.get(START.edgeId) ?? [...graph.edges.values()][0]
+  if (!edge) return
+  examiner = new Examiner(graph, edge.id, edge.to, 12, (Math.random() * 1e9) | 0)
+  examinerPanel.hidden = false
+  examinerPanel.innerHTML = '<small>Test route</small><b>Follow the directions as they are given.</b>'
+}
+
+function endTest(): void {
+  examiner = null
+  examinerPanel.hidden = true
+  globalThis.speechSynthesis?.cancel()
+}
 
 /**
  * The handle a scenario is given on the world. Deliberately narrow: a scenario
@@ -198,6 +246,9 @@ function scenarioWorld(): ScenarioWorld {
     setSignal(nodeId, edgeId, aspect) {
       signals.get(nodeId)?.forceAspect(edgeId, aspect)
     },
+    holdOnParkBrake() {
+      state.parkBrake = true
+    },
     setPedestrian(edgeId, s, pedestrianState) {
       pedestrians.force(graph, edgeId, s, pedestrianState)
     },
@@ -208,7 +259,13 @@ function startScenario(next: Scenario | null): void {
   stopReplay()
   report.hide()
   scenarioMenu.hide()
+  if (examiner) endTest()
   scenario = next
+
+  const manoeuvre = next as ManoeuvreScenario | null
+  exercise = manoeuvre?.exercise ?? null
+  exercise?.reset()
+  exerciseOutcome = 'inProgress'
 
   reset()
   if (next) {
@@ -359,10 +416,19 @@ function senses(
 function stepSimulation(driver: DriverInput, dt: number): void {
   // Recorded before the step, so the input is paired with the state it acted on.
   recorder.record(driver, state)
-  stepVehicle(state, driver, params, dt)
+  const here = graph.locate(state.x, state.y, state.heading)
+  stepVehicle(state, driver, params, dt, here && !here.offRoad ? here.gradient : 0)
   for (const controller of signals.values()) controller.update(dt)
   stepWorld(traffic, pedestrians, state, dt)
   rules.update(state, driver, dt, senses(state, traffic, pedestrians))
+
+  if (examiner) {
+    examiner.update(here, dt)
+    if (examiner.checkFinish(Math.abs(state.speed) * 3.6)) {
+      endTest()
+      openReport()
+    }
+  }
 }
 
 /** Advance the other road users around a given car. */
@@ -464,21 +530,41 @@ const loop = startLoop({
         `  ·  Esc to return to your drive`
     }
 
+    const standing = graph.locate(state.x, state.y, state.heading)
+    const ground = standing && !standing.offRoad ? standing.elevation : 0
+    const slope = standing && !standing.offRoad ? standing.gradient : 0
+
     car.setShellVisible(rig.currentMode !== 'bonnet')
-    car.update(state, driver.brake > 0 || driver.handbrake, frameDt)
+    car.update(state, driver.brake > 0 || driver.handbrake, frameDt, ground, slope)
     car.group.updateMatrixWorld(true)
-    rig.update(state, car)
+    rig.update(state, car, ground)
     world.followSun(state.x, -state.y)
 
     for (const head of world.signalHeads) {
       const controller = signals.get(head.nodeId)
       if (controller) applyAspect(head, controller.aspectFor(head.edgeId))
     }
+    if (exercise) {
+      scenarioMenu.showProgress(
+        exercise.status(),
+        exerciseOutcome === 'complete' ? 'complete' : 'running',
+      )
+    }
+
+    if (examiner) {
+      const prompt = examiner.prompt
+      examinerPanel.hidden = false
+      examinerPanel.classList.toggle('faded', !prompt || prompt.age > 7)
+      examinerPanel.innerHTML =
+        `<small>Test route — ${examiner.remaining} to go</small>` +
+        `<b>${prompt ? prompt.text : 'Follow the road.'}</b>`
+    }
+
     trafficView.update(traffic)
     trafficView.updatePedestrians(pedestrians.people)
     audio.update(msToKmh(state.speed), driver.throttle)
 
-    const located = graph.locate(state.x, state.y, state.heading)
+    const located = standing
 
     hud.update({
       speedKmh: msToKmh(state.speed),
@@ -489,6 +575,7 @@ const loop = startLoop({
       throttle: driver.throttle,
       brake: driver.brake,
       handbrake: driver.handbrake,
+      parkBrake: state.parkBrake,
       steerRad: state.steer,
       latAccel: state.latAccel,
       longAccel: state.longAccel,
@@ -523,6 +610,16 @@ if (import.meta.env.DEV) {
     editor,
     scenarioMenu,
     startScenario,
+    get examiner() {
+      return examiner
+    },
+    startTest,
+    get exercise() {
+      return exercise
+    },
+    get exerciseOutcome() {
+      return exerciseOutcome
+    },
     get scenario() {
       return scenario
     },

@@ -40,6 +40,7 @@ export class CameraRig {
   private readonly forward = new THREE.Vector3()
   private readonly anchor = new THREE.Vector3()
   private readonly lookAt = new THREE.Vector3()
+  private ground = 0
 
   constructor(aspect: number, private readonly p: CameraParams) {
     this.camera = new THREE.PerspectiveCamera(p.fov, aspect, 0.15, 2600)
@@ -56,11 +57,13 @@ export class CameraRig {
     return this.mode
   }
 
-  update(state: VehicleState, car: CarView): void {
+  /** `ground` is the height of the road under the car (m). */
+  update(state: VehicleState, car: CarView, ground = 0): void {
     // The simulation's reference point is the rear axle; aim at the middle of
     // the car so it sits centred in frame.
     this.forward.set(Math.cos(state.heading), 0, -Math.sin(state.heading))
-    this.anchor.set(state.x, 0, -state.y).addScaledVector(this.forward, 1.3)
+    this.anchor.set(state.x, ground, -state.y).addScaledVector(this.forward, 1.3)
+    this.ground = ground
 
     switch (this.mode) {
       case 'chase':
@@ -83,10 +86,10 @@ export class CameraRig {
     this.camera.position
       .copy(this.anchor)
       .addScaledVector(this.forward, -this.p.distance)
-    this.camera.position.y = this.p.height
+    this.camera.position.y = this.ground + this.p.height
 
     this.lookAt.copy(this.anchor).addScaledVector(this.forward, this.p.lookAhead)
-    this.lookAt.y = 1.0
+    this.lookAt.y = this.ground + 1.0
   }
 
   private updateBonnet(car: CarView): void {
@@ -103,7 +106,7 @@ export class CameraRig {
 
   private updateOverhead(): void {
     this.camera.fov = 50
-    this.camera.position.set(this.anchor.x, this.p.overheadHeight, this.anchor.z)
+    this.camera.position.set(this.anchor.x, this.ground + this.p.overheadHeight, this.anchor.z)
     this.lookAt.copy(this.anchor)
     // Heading-up, which is what makes a three-point turn legible.
     this.camera.up.set(this.forward.x, 0, this.forward.z)

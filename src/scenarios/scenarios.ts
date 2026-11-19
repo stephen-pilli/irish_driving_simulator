@@ -30,6 +30,8 @@ export interface ScenarioWorld {
   setSignal(nodeId: NodeId, edgeId: EdgeId, aspect: 'red' | 'green'): void
   /** Start a pedestrian crossing, or waiting, at a crossing point. */
   setPedestrian(edgeId: EdgeId, s: number, state: 'waiting' | 'crossing'): void
+  /** Leave the car held on the parking brake until the driver asks for drive. */
+  holdOnParkBrake(): void
 }
 
 export interface Scenario {

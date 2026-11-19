@@ -98,6 +98,12 @@ export interface NodeSpec {
   id: NodeId
   x: number
   y: number
+  /**
+   * Height above the datum (m). Roads take their gradient from the difference
+   * between their two ends, which makes gradients consistent by construction:
+   * there is no way to author a loop of roads that climbs for ever.
+   */
+  z?: number
   junction?: JunctionSpec
   /**
    * Set by the roundabout expansion on the former junction node, which is left
@@ -141,6 +147,13 @@ export interface Edge {
   /** Arc length at each point. */
   cumulative: number[]
   length: number
+  /** Height of each end (m), and the constant slope between them. */
+  fromZ: number
+  toZ: number
+  /** Rise over run, positive uphill in the from->to direction. */
+  gradient: number
+  /** Height of the carriageway at arc length `s`. */
+  elevationAt(s: number): number
   /** Arc length eaten by the junction at each end. */
   startTrim: number
   endTrim: number
@@ -181,6 +194,10 @@ export interface Localisation {
   aheadNode: NodeId
   /** Distance from the centre of the nearest lane the car occupies. */
   laneDeviation: number
+  /** Height of the road here (m). */
+  elevation: number
+  /** Slope as rise over run, positive when the car is pointing uphill. */
+  gradient: number
 }
 
 const EPS = 1e-9
@@ -267,6 +284,10 @@ export class LaneGraph {
       cursor -= lane.width
     }
 
+    const fromZ = from.z ?? 0
+    const toZ = to.z ?? 0
+    const gradient = length < EPS ? 0 : (toZ - fromZ) / length
+
     return {
       id: spec.id,
       from: spec.from,
@@ -280,6 +301,10 @@ export class LaneGraph {
       points,
       cumulative,
       length,
+      fromZ,
+      toZ,
+      gradient,
+      elevationAt: (at) => fromZ + gradient * Math.max(0, Math.min(length, at)),
       startTrim: from.junction?.radius ?? 0,
       endTrim: to.junction?.radius ?? 0,
       halfWidth,
@@ -412,7 +437,61 @@ export class LaneGraph {
       distanceToEnd: withEdge ? edge.length - s : s,
       aheadNode: withEdge ? edge.to : edge.from,
       laneDeviation: lateral - edge.laneOffset(laneIndex),
+      elevation: edge.elevationAt(s),
+      gradient: withEdge ? edge.gradient : -edge.gradient,
     }
+  }
+
+  /**
+   * Height of the ground at a point, blended from whatever roads are near it.
+   *
+   * The ground has to follow the roads or a road on an embankment floats over
+   * a flat field. Within `core` metres of a carriageway the ground matches it
+   * exactly, so the verges meet it; beyond that it eases back down to the
+   * datum by `radius`, which reads as an embankment rather than as a cliff.
+   */
+  terrainElevation(x: number, y: number, core = 14, radius = 80): number {
+    const cells = Math.ceil(radius / GRID_CELL)
+    const cx = Math.floor(x / GRID_CELL)
+    const cy = Math.floor(y / GRID_CELL)
+
+    let weightSum = 0
+    let valueSum = 0
+    let nearest = Infinity
+
+    for (let gx = cx - cells; gx <= cx + cells; gx++) {
+      for (let gy = cy - cells; gy <= cy + cells; gy++) {
+        const bucket = this.grid.get(`${gx},${gy}`)
+        if (!bucket) continue
+        for (const index of bucket) {
+          const seg = this.segments[index]!
+          const dx = seg.bx - seg.ax
+          const dy = seg.by - seg.ay
+          const lenSq = dx * dx + dy * dy
+          const t =
+            lenSq < EPS
+              ? 0
+              : Math.max(0, Math.min(1, ((x - seg.ax) * dx + (y - seg.ay) * dy) / lenSq))
+          const px = seg.ax + dx * t
+          const py = seg.ay + dy * t
+          const d = Math.hypot(x - px, y - py)
+          if (d > radius) continue
+
+          nearest = Math.min(nearest, d)
+          const z = this.edge(seg.edgeId).elevationAt(seg.s0 + seg.length * t)
+          const w = 1 / Math.max(d, 0.5) ** 2
+          weightSum += w
+          valueSum += z * w
+        }
+      }
+    }
+
+    if (weightSum === 0) return 0
+    const blended = valueSum / weightSum
+    if (nearest <= core) return blended
+
+    const t = Math.min(1, (nearest - core) / Math.max(radius - core, 1))
+    return blended * (1 - t * t * (3 - 2 * t))
   }
 }
 

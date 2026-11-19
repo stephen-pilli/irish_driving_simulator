@@ -163,9 +163,11 @@ export class CarView {
     for (const mesh of this.shell) mesh.visible = visible
   }
 
-  update(state: VehicleState, braking: boolean, dt: number): void {
-    this.group.position.set(state.x, 0, -state.y)
-    this.group.rotation.y = state.heading
+  update(state: VehicleState, braking: boolean, dt: number, ground = 0, gradient = 0): void {
+    this.group.position.set(state.x, ground, -state.y)
+    // Local +X is forwards and Euler 'XYZ' applies Z first, in the car's own
+    // frame, so this pitches the nose up the hill and then yaws the result.
+    this.group.rotation.set(0, state.heading, Math.atan(gradient))
 
     for (const pivot of this.steerPivots) pivot.rotation.y = state.steer
 

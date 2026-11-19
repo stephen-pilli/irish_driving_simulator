@@ -455,6 +455,85 @@ export function carriagewayRule(): Rule {
   }
 }
 
+/**
+ * Making no progress.
+ *
+ * The marking guidelines have a heading for this, and candidates lose tests on
+ * it: hesitating at a junction that is clear, or holding up traffic by
+ * crawling, is marked just as sitting too close is. Both branches here check
+ * that there is actually nothing in the way first, because being stopped
+ * behind a queue or behind a red light is not hesitation, it is driving.
+ */
+export function progressRule(): Rule {
+  let stoppedFor = 0
+  let crawlingFor = 0
+  return {
+    id: 'ie.progress.hesitation',
+    aspect: 'Progress',
+    cooldown: 15,
+    reset() {
+      stoppedFor = 0
+      crawlingFor = 0
+    },
+    evaluate(ctx) {
+      const loc = ctx.loc
+      if (!loc) {
+        stoppedFor = 0
+        crawlingFor = 0
+        return
+      }
+
+      const leader = ctx.world?.leader() ?? null
+      const blockedBehind = leader !== null && leader.gap < 14
+      const blockedByPerson = (ctx.world?.pedestrianAhead(18) ?? null) !== null
+      const givingWay = ctx.world?.mustGiveWay() ?? false
+
+      // Held at a red light is not hesitation either.
+      const line = stopLineAhead(loc, ctx.graph)
+      const control = line ? junctionControl(ctx, line.nodeId) : null
+      let heldByLights = false
+      if (line && control?.kind === 'signals' && line.distance > -2 && line.distance < 14) {
+        const aspect = ctx.signals.get(line.nodeId)?.aspectFor(loc.edge.id)
+        heldByLights = aspect === 'red' || aspect === 'redAmber'
+      }
+
+      const excused = blockedBehind || blockedByPerson || givingWay || heldByLights
+
+      if (ctx.speedKmh < 1 && !excused) {
+        stoppedFor += ctx.dt
+        if (stoppedFor >= 9) {
+          stoppedFor = 0
+          ctx.report({
+            grade: 2,
+            message: 'Undue hesitation — stopped with the road clear',
+            reference: `${ROTR} — Progress`,
+          })
+        }
+      } else {
+        stoppedFor = 0
+      }
+
+      // Crawling. Only on roads where there is room to make progress, and only
+      // with nothing ahead to be held up by.
+      const limit = loc.speedLimit
+      const tooSlow = limit >= 50 && ctx.speedKmh > 1 && ctx.speedKmh < limit * 0.5
+      if (tooSlow && !excused && !(leader && leader.gap < 45) && !withinJunction(loc, ctx.graph, 25)) {
+        crawlingFor += ctx.dt
+        if (crawlingFor >= 14) {
+          crawlingFor = 0
+          ctx.report({
+            grade: 2,
+            message: `Holding up traffic at ${Math.round(ctx.speedKmh)} km/h in a ${limit} zone`,
+            reference: `${ROTR} — Progress`,
+          })
+        }
+      } else {
+        crawlingFor = Math.max(0, crawlingFor - ctx.dt * 2)
+      }
+    },
+  }
+}
+
 /** Every rule the engine grades against. */
 export function irishRules(): Rule[] {
   return [
@@ -468,5 +547,6 @@ export function irishRules(): Rule[] {
     followingDistanceRule(),
     collisionRule(),
     pedestrianCrossingRule(),
+    progressRule(),
   ]
 }

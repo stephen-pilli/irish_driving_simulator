@@ -11,6 +11,8 @@ import type { Scenario } from '../scenarios/scenarios'
 
 export interface ScenarioMenuHooks {
   start(scenario: Scenario): void
+  /** Begin a routed test with an examiner giving directions. */
+  startTest(): void
   /** Leave the scenario and go back to the ordinary town drive. */
   freeDrive(): void
   close(): void
@@ -34,6 +36,7 @@ export class ScenarioMenu {
             <p>One situation, set up the same way every time.</p>
           </div>
           <div class="scenario-actions">
+            <button data-test>Full test route</button>
             <button data-free>Free drive</button>
             <button data-close class="primary">Close</button>
           </div>
@@ -47,6 +50,7 @@ export class ScenarioMenu {
       const target = e.target as HTMLElement
       if (target.closest('[data-close]')) return this.hooks.close()
       if (target.closest('[data-free]')) return this.hooks.freeDrive()
+      if (target.closest('[data-test]')) return this.hooks.startTest()
 
       const row = target.closest('[data-scenario]')
       if (!row) return
@@ -100,6 +104,18 @@ export class ScenarioMenu {
       `<strong>${scenario.title}</strong>` +
       `<span>${scenario.brief}</span>` +
       `<em>${scenario.reference}</em>`
+  }
+
+  /** Live commentary from a manoeuvre, appended under its brief. */
+  showProgress(text: string, state: 'running' | 'complete'): void {
+    let line = this.brief.querySelector('[data-progress]') as HTMLElement | null
+    if (!line) {
+      line = document.createElement('b')
+      line.setAttribute('data-progress', '')
+      this.brief.append(line)
+    }
+    line.textContent = text
+    line.classList.toggle('complete', state === 'complete')
   }
 
   /** Pick by number key, as printed beside each row. */

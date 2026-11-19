@@ -30,6 +30,8 @@ export interface Pedestrian {
   timer: number
   x: number
   y: number
+  /** Height of the road under them (m). */
+  z: number
   /** Width of the carriageway here, so the walk has somewhere to end. */
   halfWidth: number
 }
@@ -65,6 +67,7 @@ export class PedestrianSystem {
           timer: 4 + this.rand() * 18,
           x: 0,
           y: 0,
+          z: 0,
           halfWidth: edge.halfWidth,
         })
       }
@@ -81,6 +84,7 @@ export class PedestrianSystem {
     const p = edgePoint(edge, person.s, person.lateral)
     person.x = p.x
     person.y = p.y
+    person.z = edge.elevationAt(person.s)
   }
 
   /** Heading of the road at a crossing, for drawing the stripes. */

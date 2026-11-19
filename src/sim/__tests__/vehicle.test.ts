@@ -174,3 +174,96 @@ describe('determinism', () => {
     expect(a).toEqual(b)
   })
 })
+
+describe('slopes', () => {
+  const dt = 1 / 120
+  const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+
+  /** Run the model on a constant gradient and return the final state. */
+  function onSlope(
+    gradient: number,
+    input: DriverInput,
+    seconds: number,
+    start: Partial<VehicleState> = {},
+  ): VehicleState {
+    const state = { ...createState(), ...start }
+    for (let i = 0; i < Math.round(seconds / dt); i++) {
+      stepVehicle(state, input, DEFAULT_PARAMS, dt, gradient)
+    }
+    return state
+  }
+
+  it('behaves exactly as before on the flat', () => {
+    const withArg = onSlope(0, { ...idle, throttle: 1 }, 6)
+    const state = createState()
+    for (let i = 0; i < Math.round(6 / dt); i++) {
+      stepVehicle(state, { ...idle, throttle: 1 }, DEFAULT_PARAMS, dt)
+    }
+    expect(withArg.speed).toBeCloseTo(state.speed, 12)
+    expect(withArg.x).toBeCloseTo(state.x, 12)
+  })
+
+  it('rolls back on a hill when nothing is holding it', () => {
+    const state = onSlope(0.1, idle, 3)
+    // Gravity along a 10% slope is about 0.98 m/s^2, less rolling resistance
+    // and what engine braking is left at these speeds.
+    expect(state.speed).toBeLessThan(-1)
+    expect(state.speed).toBeGreaterThan(-3)
+  })
+
+  it('is held by the handbrake on a hill', () => {
+    const state = onSlope(0.12, { ...idle, handbrake: true }, 5)
+    expect(state.speed).toBe(0)
+    expect(state.x).toBe(0)
+  })
+
+  it('is held by the footbrake on a hill', () => {
+    const state = onSlope(0.12, { ...idle, brake: 1 }, 5)
+    expect(state.speed).toBe(0)
+  })
+
+  it('stays put on a gradient too shallow to overcome rolling resistance', () => {
+    // Rolling resistance is 0.15 m/s^2, which is about a 1.5% slope.
+    const state = onSlope(0.01, idle, 8)
+    expect(state.speed).toBe(0)
+  })
+
+  it('climbs more slowly than it accelerates on the flat', () => {
+    const flat = onSlope(0, { ...idle, throttle: 1 }, 8)
+    const hill = onSlope(0.1, { ...idle, throttle: 1 }, 8)
+    expect(hill.speed).toBeLessThan(flat.speed)
+    expect(hill.speed).toBeGreaterThan(0)
+  })
+
+  it('rolls back before the engine catches, which is what a hill start is', () => {
+    // Handbrake released on a 10% gradient with not quite enough throttle to
+    // hold it, then more. Gravity is 0.98 m/s^2 here and a fifth of throttle
+    // is 0.72, so the car goes backwards first and forwards afterwards.
+    const state = createState()
+    let lowest = 0
+    for (let i = 0; i < Math.round(1.5 / dt); i++) {
+      stepVehicle(state, { ...idle, throttle: 0.2 }, DEFAULT_PARAMS, dt, 0.1)
+      lowest = Math.min(lowest, state.x)
+    }
+    expect(lowest).toBeLessThan(-0.05)
+    expect(state.speed).toBeLessThan(0)
+
+    for (let i = 0; i < Math.round(2 / dt); i++) {
+      stepVehicle(state, { ...idle, throttle: 0.9 }, DEFAULT_PARAMS, dt, 0.1)
+    }
+    expect(state.speed).toBeGreaterThan(1)
+  })
+
+  it('runs away downhill out of gear', () => {
+    // In neutral there is no engine braking to hold it, which is exactly why
+    // coasting down a hill out of gear is the thing you are told not to do.
+    const state = onSlope(-0.08, idle, 20, { gear: 'N' })
+    expect(state.speed).toBeGreaterThan(5)
+  })
+
+  it('is held back by engine braking downhill in gear', () => {
+    const inGear = onSlope(-0.08, idle, 20)
+    const neutral = onSlope(-0.08, idle, 20, { gear: 'N' })
+    expect(inGear.speed).toBeLessThan(neutral.speed)
+  })
+})

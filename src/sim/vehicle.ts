@@ -3,6 +3,9 @@ import type { DriverInput } from '../input/input'
 
 export type Gear = 'R' | 'N' | 'D'
 
+/** Standard gravity (m/s^2), used for the component along a slope. */
+const GRAVITY = 9.81
+
 /**
  * Everything tunable about how the car drives. Exposed to the in-game tuning
  * panel so the numbers can be dialled in by feel rather than by guesswork.
@@ -72,6 +75,13 @@ export interface VehicleState {
   longAccel: number
   /** True while cornering demand exceeds available grip. */
   atGripLimit: boolean
+  /**
+   * Parking brake. Holds the car at a standstill until the driver asks for
+   * drive, which is what makes a hill start a hill start: without it the car
+   * is already rolling before anyone has touched anything, and the exercise
+   * becomes a reaction test instead.
+   */
+  parkBrake: boolean
   /** Metres travelled, for the HUD odometer. */
   odometer: number
 }
@@ -88,6 +98,7 @@ export function createState(x = 0, y = 0, heading = 0): VehicleState {
     latAccel: 0,
     longAccel: 0,
     atGripLimit: false,
+    parkBrake: false,
     odometer: 0,
   }
 }
@@ -106,6 +117,8 @@ export function stepVehicle(
   input: DriverInput,
   p: VehicleParams,
   dt: number,
+  /** Slope of the road as rise over run, positive when pointing uphill. */
+  gradient = 0,
 ): void {
   // --- Steering: rate-limited toward the driver's demand -------------------
   const maxSteer = p.maxSteerDeg * DEG
@@ -115,7 +128,6 @@ export function stepVehicle(
 
   // --- Longitudinal -------------------------------------------------------
   const absV = Math.abs(s.speed)
-  const dir = Math.sign(s.speed)
   let a = 0
 
   const powering = input.throttle > 0 && s.gear !== 'N'
@@ -131,9 +143,22 @@ export function stepVehicle(
     a += gearDir * input.throttle * available * headroom
   }
 
+  // Gravity along the road. Separated from the resistive forces below because
+  // it behaves differently in kind: drag and braking can only ever slow a car
+  // down, whereas gravity can and must pull a stopped car backwards down a
+  // hill. Lumping them together makes a hill start impossible to fail.
+  const gravityAccel = -GRAVITY * Math.sin(Math.atan(gradient))
+  a += gravityAccel
+
   // Retarding forces, accumulated as a positive magnitude.
   let decel = 0
-  if (!powering && absV > 0.1) decel += p.engineBrakeDecel
+  // Engine braking needs a turning engine and a gear to reach it through, and
+  // it fades out as the car slows. Applied flat, it very nearly cancelled
+  // gravity on a hill, so a car with nothing holding it crept backwards at a
+  // tenth of a metre a second instead of rolling away.
+  if (!powering && s.gear !== 'N' && absV > 0.1) {
+    decel += p.engineBrakeDecel * Math.min(1, absV / 4)
+  }
   if (absV > 0.01) {
     decel += p.rollingResistance + p.dragCoeff * absV * absV
     if (input.handbrake) decel += p.handbrakeDecel
@@ -144,15 +169,26 @@ export function stepVehicle(
     // stopping distances the trainer teaches would be shorter than reality.
     if (input.brake > 0 || input.handbrake) decel = Math.min(decel, p.maxBrakeDecel)
   }
-  a -= dir * decel
 
+  // Drive and gravity first; then the resistive forces, which oppose whatever
+  // motion is left and stop at zero rather than reversing it.
   let v = s.speed + a * dt
-  // Resistive forces must bring the car to rest, never push it backwards.
-  if (!powering && s.speed !== 0 && Math.sign(v) !== Math.sign(s.speed)) v = 0
-  if (input.handbrake && Math.abs(v) < 0.3) v = 0
-  // Below the deadband the resistive forces switch off, which would otherwise
-  // leave the car drifting at a few millimetres per second indefinitely.
-  if (!powering && Math.abs(v) < 0.05) v = 0
+  const resist = decel * dt
+  if (Math.abs(v) <= resist) v = 0
+  else v -= Math.sign(v) * resist
+
+  // A braked car stays put, on any slope the brakes can hold.
+  if ((input.brake > 0.05 || input.handbrake) && Math.abs(v) < 0.35) v = 0
+  // And on a slope shallow enough for rolling resistance to hold it, so does
+  // one that is simply stopped. On the flat this is the old deadband, which
+  // kept the car from drifting at a few millimetres per second for ever.
+  if (!powering && Math.abs(v) < 0.05 && Math.abs(gravityAccel) <= p.rollingResistance) v = 0
+
+  // The parking brake holds until the driver asks for drive, then releases.
+  if (s.parkBrake) {
+    if (input.throttle > 0.05) s.parkBrake = false
+    else v = 0
+  }
 
   const cap = kmhToMs(v >= 0 ? p.maxSpeedKmh : p.maxReverseKmh)
   v = clamp(v, -cap, cap)

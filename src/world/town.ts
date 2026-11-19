@@ -17,10 +17,12 @@ import { generalLane, twoWay, type LaneGraphSpec } from './laneGraph'
  *    must not happen
  *  - a three-arm roundabout in the north-east corner
  *  - pedestrian crossings on the main street and the residential road
+ *  - gradients: the residential street climbs at about 7%, and the rural road
+ *    rises into the hills, so hill starts and runaway descents are both real
  */
 export const BALLYROAD: LaneGraphSpec = {
   nodes: [
-    { id: 'n_west', x: -320, y: 0 },
+    { id: 'n_west', x: -320, y: 0, z: 3 },
     {
       id: 'n_cross',
       x: 0,
@@ -39,7 +41,9 @@ export const BALLYROAD: LaneGraphSpec = {
         },
       },
     },
-    { id: 'n_north', x: 0, y: 240 },
+    // The residential street climbs out of the town centre at about 7%,
+    // which is what makes a hill start worth practising.
+    { id: 'n_north', x: 0, y: 240, z: 16 },
     {
       id: 'n_east',
       x: 300,
@@ -64,14 +68,15 @@ export const BALLYROAD: LaneGraphSpec = {
       id: 'n_ne',
       x: 300,
       y: 200,
+      z: 11,
       // Expanded by the graph into a clockwise circulatory carriageway with a
       // yield-controlled entry on each of its three arms.
       junction: { radius: 20, control: { kind: 'roundabout' } },
     },
-    { id: 'n_ne_east', x: 470, y: 240 },
-    { id: 'n_rural_end', x: 520, y: -200 },
-    { id: 'n_se', x: 260, y: -260 },
-    { id: 'n_sw', x: -260, y: -260 },
+    { id: 'n_ne_east', x: 470, y: 240, z: 9 },
+    { id: 'n_rural_end', x: 520, y: -200, z: 24 },
+    { id: 'n_se', x: 260, y: -260, z: 6 },
+    { id: 'n_sw', x: -260, y: -260, z: -4 },
   ],
 
   edges: [

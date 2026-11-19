@@ -10,6 +10,7 @@ export interface HudInfo {
   throttle: number
   brake: number
   handbrake: boolean
+  parkBrake: boolean
   steerRad: number
   latAccel: number
   longAccel: number
@@ -77,8 +78,9 @@ export class Hud {
     const over = info.speedLimit !== null && info.speedKmh > info.speedLimit + 5
     this.limit.parentElement?.classList.toggle('over', over)
 
-    this.gear.textContent = info.handbrake ? 'P' : info.gear
-    this.gear.classList.toggle('warn', info.handbrake)
+    const held = info.handbrake || info.parkBrake
+    this.gear.textContent = held ? 'P' : info.gear
+    this.gear.classList.toggle('warn', held)
 
     this.bars.throttle.style.width = `${info.throttle * 100}%`
     this.bars.brake.style.width = `${info.brake * 100}%`

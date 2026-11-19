@@ -122,7 +122,7 @@ export class TrafficView {
     let count = 0
     for (const person of people) {
       if (person.state === 'away' || count >= WALKER_CAPACITY) continue
-      this.dummy.position.set(person.x, 0.9, -person.y)
+      this.dummy.position.set(person.x, person.z + 0.9, -person.y)
       this.dummy.rotation.set(0, 0, 0)
       this.dummy.scale.setScalar(1)
       this.dummy.updateMatrix()
@@ -147,7 +147,7 @@ export class TrafficView {
     const d = this.dummy
     d.position.set(
       user.x + Math.cos(user.heading) * forwardOffset,
-      centreHeight,
+      user.z + centreHeight,
       -(user.y + Math.sin(user.heading) * forwardOffset),
     )
     d.rotation.set(0, user.heading, 0)

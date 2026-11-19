@@ -114,6 +114,8 @@ export interface RoadUser {
   stoppedFor: number
   x: number
   y: number
+  /** Height of the road under it (m). */
+  z: number
   heading: number
   /** Colour seed, so the renderer can vary without storing anything itself. */
   tint: number
@@ -313,6 +315,7 @@ export class TrafficSystem {
       stoppedFor: 0,
       x: 0,
       y: 0,
+      z: 0,
       heading: 0,
       tint: this.rand(),
     }
@@ -344,6 +347,7 @@ export class TrafficSystem {
     const p = edgePoint(edge, user.s, this.lateral(user))
     user.x = p.x
     user.y = p.y
+    user.z = edge.elevationAt(user.s)
     user.heading = user.direction === 1 ? pose.heading : pose.heading + Math.PI
   }
 
