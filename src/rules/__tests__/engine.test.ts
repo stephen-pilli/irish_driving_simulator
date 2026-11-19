@@ -7,7 +7,7 @@ import { FAIL_THRESHOLDS, RulesEngine } from '../engine'
 import type { Aspect, FaultGrade, Rule } from '../types'
 
 const DT = 1 / 60
-const input = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+const input = { throttle: 0, brake: 0, steer: 0, handbrake: false, indicator: 'off' as const }
 
 /** A rule that fires on every step, for exercising the grading logic. */
 const firing = (id: string, aspect: Aspect, grade: FaultGrade): Rule => ({

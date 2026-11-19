@@ -21,11 +21,11 @@ function startState(): VehicleState {
 /** A drive with enough throttle, steering and braking to be worth replaying. */
 function scriptedInput(step: number): DriverInput {
   const t = step * DT
-  if (t < 6) return { throttle: 1, brake: 0, steer: 0, handbrake: false }
-  if (t < 9) return { throttle: 1, brake: 0, steer: 0.4, handbrake: false }
-  if (t < 12) return { throttle: 0, brake: 0, steer: -0.6, handbrake: false }
-  if (t < 15) return { throttle: 0.5, brake: 0, steer: 0, handbrake: false }
-  return { throttle: 0, brake: 1, steer: 0, handbrake: false }
+  if (t < 6) return { throttle: 1, brake: 0, steer: 0, handbrake: false, indicator: 'off' }
+  if (t < 9) return { throttle: 1, brake: 0, steer: 0.4, handbrake: false, indicator: 'off' }
+  if (t < 12) return { throttle: 0, brake: 0, steer: -0.6, handbrake: false, indicator: 'off' }
+  if (t < 15) return { throttle: 0.5, brake: 0, steer: 0, handbrake: false, indicator: 'off' }
+  return { throttle: 0, brake: 1, steer: 0, handbrake: false, indicator: 'off' }
 }
 
 interface LiveRun {
@@ -72,7 +72,7 @@ describe('recording a drive', () => {
     const params = { ...DEFAULT_PARAMS }
     const recorder = new DriveRecorder()
     recorder.begin(state, params, new Map(), DT)
-    recorder.record({ throttle: 1, brake: 0, steer: 0, handbrake: false }, state)
+    recorder.record({ throttle: 1, brake: 0, steer: 0, handbrake: false, indicator: 'off' }, state)
 
     // The tuning panel mutates the live parameters in place mid-drive.
     params.maxAccel = 99
@@ -89,7 +89,7 @@ describe('recording a drive', () => {
     const state = startState()
     const recorder = new DriveRecorder()
     recorder.begin(state, DEFAULT_PARAMS, new Map(), DT)
-    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false, indicator: 'off' }
 
     recorder.record(idle, state)
     state.gear = 'R'

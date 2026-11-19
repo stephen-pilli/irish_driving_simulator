@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { followingSeconds, gripFor } from '../conditions'
 import { DEG } from '../../core/math'
 import type { DriverInput } from '../../input/input'
 import {
@@ -18,6 +19,7 @@ const input = (over: Partial<DriverInput> = {}): DriverInput => ({
   brake: 0,
   steer: 0,
   handbrake: false,
+  indicator: 'off',
   ...over,
 })
 
@@ -177,7 +179,13 @@ describe('determinism', () => {
 
 describe('slopes', () => {
   const dt = 1 / 120
-  const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+  const idle: DriverInput = {
+    throttle: 0,
+    brake: 0,
+    steer: 0,
+    handbrake: false,
+    indicator: 'off',
+  }
 
   /** Run the model on a constant gradient and return the final state. */
   function onSlope(
@@ -265,5 +273,52 @@ describe('slopes', () => {
     const inGear = onSlope(-0.08, idle, 20)
     const neutral = onSlope(-0.08, idle, 20, { gear: 'N' })
     expect(inGear.speed).toBeLessThan(neutral.speed)
+  })
+})
+
+describe('grip', () => {
+  const dt = 1 / 120
+
+  /** Distance to stop from `kmh` with a given grip fraction. */
+  function stoppingDistance(kmh: number, grip: number): number {
+    const state = createState()
+    state.speed = kmh / 3.6
+    const start = state.x
+    for (let i = 0; i < 120 * 20 && state.speed > 0; i++) {
+      stepVehicle(state, input({ brake: 1 }), DEFAULT_PARAMS, dt, 0, grip)
+    }
+    return state.x - start
+  }
+
+  it('leaves dry braking exactly as it was', () => {
+    expect(stoppingDistance(100, 1)).toBeCloseTo(stoppingDistance(100, 1), 10)
+    // The documented dry figure.
+    expect(stoppingDistance(100, 1)).toBeGreaterThan(40)
+    expect(stoppingDistance(100, 1)).toBeLessThan(46)
+  })
+
+  it('stretches wet braking by about half', () => {
+    const dry = stoppingDistance(100, 1)
+    const wet = stoppingDistance(100, gripFor({ night: false, rain: 1 }))
+    expect(wet / dry).toBeGreaterThan(1.3)
+    expect(wet / dry).toBeLessThan(1.6)
+  })
+
+  it('lowers the cornering limit in the wet', () => {
+    const corner = (grip: number): number => {
+      const state = createState()
+      state.speed = 22
+      for (let i = 0; i < 120 * 3; i++) {
+        stepVehicle(state, input({ steer: 1 }), DEFAULT_PARAMS, dt, 0, grip)
+      }
+      return Math.abs(state.latAccel)
+    }
+    expect(corner(0.7)).toBeLessThan(corner(1) - 1)
+  })
+
+  it('asks for four seconds of gap in the wet and two in the dry', () => {
+    expect(followingSeconds({ night: false, rain: 0 })).toBe(2)
+    expect(followingSeconds({ night: true, rain: 0 })).toBe(2)
+    expect(followingSeconds({ night: false, rain: 0.8 })).toBe(4)
   })
 })

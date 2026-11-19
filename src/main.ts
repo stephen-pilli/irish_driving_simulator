@@ -1,8 +1,11 @@
+import * as THREE from 'three'
 import { msToKmh } from './core/math'
 import { startLoop } from './core/loop'
 import { Input, type DriverInput } from './input/input'
 import { CameraRig, DEFAULT_CAMERA_PARAMS } from './render/cameras'
 import { CarView } from './render/car'
+import { Mirrors } from './render/mirrors'
+import { CONDITION_CYCLE, gripFor, type Conditions } from './sim/conditions'
 import { World } from './render/scene'
 import { applyAspect } from './render/roadGeometry'
 import {
@@ -21,6 +24,7 @@ import { EngineAudio } from './ui/audio'
 import { Hud } from './ui/hud'
 import { Report } from './ui/report'
 import { ScenarioMenu } from './ui/scenarioMenu'
+import { TouchControls } from './ui/touch'
 import { SCENARIOS, type Scenario, type ScenarioWorld } from './scenarios/scenarios'
 import { Examiner } from './exam/examiner'
 import {
@@ -59,6 +63,15 @@ const rig = new CameraRig(window.innerWidth / window.innerHeight, cameraParams)
 const input = new Input()
 const hud = new Hud(hudRoot)
 const audio = new EngineAudio()
+const touch = new TouchControls(document.getElementById('touch') as HTMLElement, input)
+/**
+ * When the driver last looked at each thing, in simulation seconds. The rules
+ * read these as "seconds since", so a drive that has only just started must
+ * not look like one where every check was made a moment ago.
+ */
+const looked = { mirror: -Infinity, left: -Infinity, right: -Infinity }
+let simSeconds = 0
+
 /** The manoeuvre being graded, if the current scenario is one. */
 let exercise: Exercise | null = null
 let exerciseOutcome: ExerciseOutcome = 'inProgress'
@@ -80,6 +93,12 @@ let rules = new RulesEngine(ruleSet(), graph, signals)
 let traffic = new TrafficSystem(graph, signals, DEFAULT_TRAFFIC)
 let pedestrians = new PedestrianSystem(graph)
 const trafficView = new TrafficView(DEFAULT_TRAFFIC.population + 8)
+const mirrors = new Mirrors()
+
+let conditionIndex = 0
+let conditions: Conditions = CONDITION_CYCLE[0]!.conditions
+const cameraPrevious = new THREE.Vector3()
+const cameraVelocity = new THREE.Vector3()
 
 const recorder = new DriveRecorder()
 /** Non-null while a recorded drive is being played back instead of driven. */
@@ -169,6 +188,7 @@ const editor = new RoadEditor(
 
 // A layout saved in a previous session replaces the built-in town at boot.
 editor.syncToSimulation()
+touch.showIfTouch()
 
 function reset(): void {
   // The editor can delete the road the drive normally starts on, so fall back
@@ -183,6 +203,10 @@ function reset(): void {
   const pose = sampleEdge(edge, s)
   Object.assign(state, createState(p.x, p.y, pose.heading))
   rules.reset()
+  simSeconds = 0
+  looked.mirror = -Infinity
+  looked.left = -Infinity
+  looked.right = -Infinity
   // A fresh seed per drive, so the traffic is reproducible within a drive but
   // not identical between drives — the same junction twice should not be the
   // same problem twice.
@@ -414,13 +438,32 @@ function senses(
  * a situation worth looking at is to sit there driving to it in real time.
  */
 function stepSimulation(driver: DriverInput, dt: number): void {
+  simSeconds += dt
   // Recorded before the step, so the input is paired with the state it acted on.
   recorder.record(driver, state)
   const here = graph.locate(state.x, state.y, state.heading)
-  stepVehicle(state, driver, params, dt, here && !here.offRoad ? here.gradient : 0)
+  stepVehicle(
+    state,
+    driver,
+    params,
+    dt,
+    here && !here.offRoad ? here.gradient : 0,
+    gripFor(conditions),
+  )
   for (const controller of signals.values()) controller.update(dt)
   stepWorld(traffic, pedestrians, state, dt)
-  rules.update(state, driver, dt, senses(state, traffic, pedestrians))
+  rules.update(
+    state,
+    driver,
+    dt,
+    senses(state, traffic, pedestrians),
+    {
+      sinceMirror: simSeconds - looked.mirror,
+      sinceLeftGlance: simSeconds - looked.left,
+      sinceRightGlance: simSeconds - looked.right,
+    },
+    conditions,
+  )
 
   if (examiner) {
     examiner.update(here, dt)
@@ -463,6 +506,33 @@ function handleActions(): void {
         break
       case 'toggleAudio':
         audio.toggle()
+        break
+      case 'cycleMirrors':
+        mirrors.cycle()
+        break
+      case 'toggleTouch':
+        touch.toggle()
+        break
+      case 'cycleConditions': {
+        conditionIndex = (conditionIndex + 1) % CONDITION_CYCLE.length
+        conditions = CONDITION_CYCLE[conditionIndex]!.conditions
+        world.setConditions(conditions)
+        break
+      }
+      case 'indicateLeft':
+        input.setIndicator('left', state.heading)
+        break
+      case 'indicateRight':
+        input.setIndicator('right', state.heading)
+        break
+      case 'mirrorCheck':
+        looked.mirror = simSeconds
+        break
+      case 'glanceLeft':
+        looked.left = simSeconds
+        break
+      case 'glanceRight':
+        looked.right = simSeconds
         break
       case 'toggleScenarios':
         if (scenarioMenu.isOpen) scenarioMenu.hide()
@@ -515,6 +585,7 @@ const loop = startLoop({
     }
 
 
+    input.autoCancelIndicator(state.heading)
     stepSimulation(input.sample(), dt)
   },
   render(frameDt) {
@@ -535,7 +606,15 @@ const loop = startLoop({
     const slope = standing && !standing.offRoad ? standing.gradient : 0
 
     car.setShellVisible(rig.currentMode !== 'bonnet')
-    car.update(state, driver.brake > 0 || driver.handbrake, frameDt, ground, slope)
+    car.update(
+      state,
+      driver.brake > 0 || driver.handbrake,
+      frameDt,
+      ground,
+      slope,
+      driver.indicator,
+      simSeconds,
+    )
     car.group.updateMatrixWorld(true)
     rig.update(state, car, ground)
     world.followSun(state.x, -state.y)
@@ -586,7 +665,21 @@ const loop = startLoop({
       audio: audio.isEnabled,
     })
 
+    car.setHeadlights(conditions.night)
+    cameraVelocity.subVectors(rig.camera.position, cameraPrevious).divideScalar(Math.max(frameDt, 1e-3))
+    cameraPrevious.copy(rig.camera.position)
+    world.rain.update(frameDt, rig.camera.position, cameraVelocity)
+
+    // Mirrors render their own passes first, then go over the finished frame.
+    mirrors.render(
+      world.renderer,
+      world.scene,
+      car,
+      window.innerWidth / window.innerHeight,
+      rig.currentMode === 'bonnet',
+    )
     world.renderer.render(world.scene, rig.camera)
+    mirrors.composite(world.renderer)
   },
 })
 
@@ -609,6 +702,7 @@ if (import.meta.env.DEV) {
     },
     editor,
     scenarioMenu,
+    mirrors,
     startScenario,
     get examiner() {
       return examiner
@@ -635,7 +729,14 @@ if (import.meta.env.DEV) {
     startReplay,
     /** Run the live drive forward without waiting for frames. */
     advance(seconds: number, driver: Partial<DriverInput> = {}) {
-      const d: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false, ...driver }
+      const d: DriverInput = {
+        throttle: 0,
+        brake: 0,
+        steer: 0,
+        handbrake: false,
+        indicator: 'off',
+        ...driver,
+      }
       const steps = Math.round(seconds / FIXED_DT)
       for (let i = 0; i < steps; i++) stepSimulation(d, FIXED_DT)
     },

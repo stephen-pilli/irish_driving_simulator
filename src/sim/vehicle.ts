@@ -119,6 +119,8 @@ export function stepVehicle(
   dt: number,
   /** Slope of the road as rise over run, positive when pointing uphill. */
   gradient = 0,
+  /** Available grip as a fraction of dry grip; 0.7 is a wet road. */
+  grip = 1,
 ): void {
   // --- Steering: rate-limited toward the driver's demand -------------------
   const maxSteer = p.maxSteerDeg * DEG
@@ -167,7 +169,7 @@ export function stepVehicle(
     // The tyres have a single grip budget. Braking must not stack on top of
     // engine braking and drag to beat the quoted figure — otherwise the
     // stopping distances the trainer teaches would be shorter than reality.
-    if (input.brake > 0 || input.handbrake) decel = Math.min(decel, p.maxBrakeDecel)
+    if (input.brake > 0 || input.handbrake) decel = Math.min(decel, p.maxBrakeDecel * grip)
   }
 
   // Drive and gravity first; then the resistive forces, which oppose whatever
@@ -199,10 +201,11 @@ export function stepVehicle(
   // --- Yaw: bicycle kinematics, clipped to the grip circle -----------------
   let yawRate = (s.speed / p.wheelbase) * Math.tan(s.steer)
   const demandedLat = s.speed * yawRate
+  const available = p.maxLatAccel * grip
   s.atGripLimit = false
-  if (Math.abs(demandedLat) > p.maxLatAccel) {
+  if (Math.abs(demandedLat) > available) {
     s.atGripLimit = true
-    yawRate = (Math.sign(yawRate) * p.maxLatAccel) / Math.max(Math.abs(s.speed), 0.001)
+    yawRate = (Math.sign(yawRate) * available) / Math.max(Math.abs(s.speed), 0.001)
   }
   s.yawRate = yawRate
   s.latAccel = s.speed * yawRate

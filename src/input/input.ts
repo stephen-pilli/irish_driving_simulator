@@ -9,8 +9,18 @@ export type Action =
   | 'toggleAudio'
   | 'toggleReport'
   | 'toggleScenarios'
+  | 'indicateLeft'
+  | 'indicateRight'
+  | 'cycleMirrors'
+  | 'cycleConditions'
+  | 'toggleTouch'
+  | 'mirrorCheck'
+  | 'glanceLeft'
+  | 'glanceRight'
   | 'cancel'
   | 'reset'
+
+export type IndicatorSide = 'off' | 'left' | 'right'
 
 export interface DriverInput {
   /** 0..1 */
@@ -20,6 +30,7 @@ export interface DriverInput {
   /** -1 (full right) .. +1 (full left) */
   steer: number
   handbrake: boolean
+  indicator: IndicatorSide
 }
 
 const KEY_ACTIONS: Record<string, Action> = {
@@ -30,6 +41,14 @@ const KEY_ACTIONS: Record<string, Action> = {
   KeyE: 'toggleEditor',
   KeyM: 'toggleAudio',
   KeyP: 'toggleScenarios',
+  Comma: 'indicateLeft',
+  Period: 'indicateRight',
+  KeyV: 'cycleMirrors',
+  KeyK: 'cycleConditions',
+  KeyG: 'toggleTouch',
+  Digit1: 'mirrorCheck',
+  Digit2: 'glanceLeft',
+  Digit3: 'glanceRight',
   Enter: 'toggleReport',
   Escape: 'cancel',
   Backspace: 'reset',
@@ -63,8 +82,25 @@ function applyDeadzone(v: number): number {
  * input device, so that lives in the vehicle model.
  */
 export class Input {
-  readonly driver: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+  readonly driver: DriverInput = {
+    throttle: 0,
+    brake: 0,
+    steer: 0,
+    handbrake: false,
+    indicator: 'off',
+  }
+  private indicator: IndicatorSide = 'off'
+  /** Heading when the indicator was switched on, for self-cancelling. */
+  private indicatorHeading = 0
   private readonly down = new Set<string>()
+  /**
+   * Keys held by the on-screen controls. Kept apart from the real ones so that
+   * losing focus clears the keyboard without also releasing a finger that is
+   * still on the glass.
+   */
+  private readonly virtual = new Set<string>()
+  /** Analogue steering from a touch strip, or null when it is not in use. */
+  private virtualSteer: number | null = null
   private readonly pending: Action[] = []
   private gamepadConnected = false
 
@@ -102,7 +138,52 @@ export class Input {
   }
 
   private held(...codes: string[]): boolean {
-    return codes.some((c) => this.down.has(c))
+    return codes.some((c) => this.down.has(c) || this.virtual.has(c))
+  }
+
+  /** Press or release a key from the on-screen controls. */
+  setVirtualKey(code: string, held: boolean): void {
+    if (held) this.virtual.add(code)
+    else this.virtual.delete(code)
+  }
+
+  /** Steering from a touch strip: -1 full right to +1 full left, or null. */
+  setVirtualSteer(value: number | null): void {
+    this.virtualSteer = value === null ? null : clamp(value, -1, 1)
+  }
+
+  releaseVirtual(): void {
+    this.virtual.clear()
+    this.virtualSteer = null
+  }
+
+  /** A one-shot action from the on-screen controls. */
+  pushAction(action: Action): void {
+    this.pending.push(action)
+  }
+
+  /** Flick the stalk. Selecting one side cancels the other. */
+  setIndicator(side: IndicatorSide, heading: number): void {
+    this.indicator = this.indicator === side ? 'off' : side
+    this.indicatorHeading = heading
+  }
+
+  get indicatorSide(): IndicatorSide {
+    return this.indicator
+  }
+
+  /**
+   * Self-cancelling, as a real stalk is: once the car has turned through most
+   * of a right angle the signal has done its job and switching it off is no
+   * longer something the driver has to remember. Leaving it on is a fault, so
+   * a simulator that never cancelled would mark every turn.
+   */
+  autoCancelIndicator(heading: number): void {
+    if (this.indicator === 'off') return
+    let delta = (heading - this.indicatorHeading) % (Math.PI * 2)
+    if (delta > Math.PI) delta -= Math.PI * 2
+    if (delta < -Math.PI) delta += Math.PI * 2
+    if (Math.abs(delta) > 1.2) this.indicator = 'off'
   }
 
   /** Drain the edge-triggered actions queued since the last call. */
@@ -116,7 +197,9 @@ export class Input {
     d.throttle = this.held('KeyW', 'ArrowUp') ? 1 : 0
     d.brake = this.held('KeyS', 'ArrowDown') ? 1 : 0
     d.steer = (this.held('KeyA', 'ArrowLeft') ? 1 : 0) - (this.held('KeyD', 'ArrowRight') ? 1 : 0)
+    if (this.virtualSteer !== null) d.steer = this.virtualSteer
     d.handbrake = this.held('Space')
+    d.indicator = this.indicator
 
     if (this.gamepadConnected) this.mixGamepad(d)
 

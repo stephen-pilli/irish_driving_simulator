@@ -1,4 +1,5 @@
 import type { DriverInput } from '../input/input'
+import type { Conditions } from '../sim/conditions'
 import type { VehicleState } from '../sim/vehicle'
 import type { LaneGraph, Localisation, NodeId } from '../world/laneGraph'
 import type { SignalController } from '../world/signals'
@@ -17,6 +18,10 @@ export type FaultGrade = 1 | 2 | 3
 /**
  * Headings on the test report form. Faults are tallied per aspect as well as
  * overall, because the pass/fail rules have per-aspect thresholds.
+ *
+ * There is no separate "Mirrors" heading here on purpose. The RSA guidelines
+ * record poor mirror use as an OBSERVATION fault on a category B car test,
+ * and as a Mirror fault only on van, BE and HGV tests. This is a car.
  */
 export type Aspect =
   | 'Vehicle controls'
@@ -25,6 +30,7 @@ export type Aspect =
   | 'Road position'
   | 'Overtaking'
   | 'Speed'
+  | 'Signals'
   | 'Traffic controls'
   | 'Observation'
   | 'Anticipation and reaction'
@@ -37,6 +43,7 @@ export const ALL_ASPECTS: readonly Aspect[] = [
   'Road position',
   'Overtaking',
   'Speed',
+  'Signals',
   'Traffic controls',
   'Observation',
   'Anticipation and reaction',
@@ -82,6 +89,26 @@ export interface WorldSense {
   mustGiveWay(): boolean
 }
 
+/**
+ * What the driver has done with their eyes, as seconds since each check.
+ *
+ * Separate from WorldSense because it is not a perception of the world: it is
+ * a record of the driver's own actions, and the rules that read it are asking
+ * "did you look", not "what was there".
+ */
+export interface Observations {
+  /** Seconds since the mirrors were last checked. Infinity if never. */
+  sinceMirror: number
+  sinceLeftGlance: number
+  sinceRightGlance: number
+}
+
+export const NO_OBSERVATIONS: Observations = {
+  sinceMirror: Infinity,
+  sinceLeftGlance: Infinity,
+  sinceRightGlance: Infinity,
+}
+
 export interface RuleContext {
   state: Readonly<VehicleState>
   input: Readonly<DriverInput>
@@ -95,6 +122,8 @@ export interface RuleContext {
   speedKmh: number
   /** Null when the drive is running with no other road users. */
   world: WorldSense | null
+  observations: Observations
+  conditions: Conditions
   /** Report a fault. The engine applies the cooldown and double-marking rules. */
   report(spec: FaultSpec): void
 }

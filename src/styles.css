@@ -671,3 +671,97 @@ html, body {
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* ---- On-screen controls ---- */
+#touch {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 16;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 18px 58px;
+  pointer-events: none;
+  touch-action: none;
+}
+#touch[hidden] { display: none; }
+#touch > * { pointer-events: auto; }
+
+.touch-left { display: grid; gap: 6px; justify-items: center; }
+.touch-strip {
+  position: relative;
+  width: min(44vw, 320px);
+  height: 58px;
+  border-radius: 29px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  backdrop-filter: blur(8px);
+  touch-action: none;
+}
+.touch-strip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--edge);
+}
+.touch-strip i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.touch-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.touch-right { display: grid; gap: 8px; justify-items: end; }
+.touch-row { display: flex; gap: 8px; }
+.touch-pedal {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  border: 1px solid var(--edge);
+  background: rgba(111, 208, 140, 0.18);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: none;
+}
+.touch-pedal.brake { background: rgba(255, 93, 77, 0.18); }
+.touch-pedal.held, .touch-small.held { filter: brightness(1.6); }
+.touch-small {
+  min-width: 52px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: none;
+}
+.touch-small.wide { width: 100%; }
+
+/* The on-screen controls take the bottom of the screen, so the instruments
+   and the running report move up out from under them. */
+body.touch-on .hud-cluster { bottom: 220px; }
+body.touch-on .hud-report { bottom: 250px; }
+body.touch-on #touch { padding-bottom: 46px; }
+@media (max-height: 620px) {
+  body.touch-on .hud-report { display: none; }
+}

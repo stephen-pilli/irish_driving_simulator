@@ -258,6 +258,20 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
 
       if (control.kind === 'signals') {
         signalHeads.push(createSignalHead(group, edge, node.id, s, span))
+      } else if (control.kind === 'stop' || control.kind === 'yield') {
+        // On the driver's left, which in Ireland is the outer edge of their
+        // own side of the road.
+        const lateral = atEnd ? span[0] + 1.3 : -(span[0] + 1.3)
+        addSign(
+          group,
+          edge,
+          atEnd,
+          s,
+          lateral,
+          control.kind === 'stop' ? SIGN_FACES.stop() : SIGN_FACES.yield(),
+          0.95,
+          1.9,
+        )
       }
     }
   }
@@ -287,11 +301,171 @@ export function buildTownGeometry(graph: LaneGraph, materials: RoadMaterials): T
     group.add(kerb)
   }
 
+  // Speed limit signs, wherever the limit actually changes. Signing every road
+  // would be noise; signing a change is what a real road does.
+  for (const node of graph.nodes.values()) {
+    for (const edgeId of node.edges) {
+      const edge = graph.edges.get(edgeId)
+      if (!edge || edge.circulatoryOf) continue
+
+      const others = node.edges
+        .filter((id) => id !== edgeId)
+        .map((id) => graph.edges.get(id))
+        .filter((e): e is Edge => e !== undefined && e.circulatoryOf === undefined)
+      if (others.length === 0) continue
+      // Signed when every road you could have come from had a different limit.
+      if (others.some((other) => other.speedLimit === edge.speedLimit)) continue
+
+      // A limit sign faces the traffic ENTERING the road, which is the traffic
+      // travelling away from this junction. Facing it the other way signs the
+      // limit at drivers who are leaving it, which is worse than no sign.
+      const entering = edge.from === node.id
+      const s = entering ? edge.startTrim + 9 : edge.length - edge.endTrim - 9
+      if (s <= 1 || s >= edge.length - 1) continue
+
+      // On that driver's left: positive lateral when travelling with the edge.
+      const lateral = entering ? edge.halfWidth + 1.1 : -(edge.halfWidth + 1.1)
+      addSign(group, edge, entering, s, lateral, SIGN_FACES.limit(edge.speedLimit), 0.8, 1.85)
+    }
+  }
+
   addMesh(group, surfaces.length ? mergeGeometries(surfaces) : null, materials.tarmac)
   addMesh(group, vergeParts.length ? mergeGeometries(vergeParts) : null, materials.verge)
   addMesh(group, paintParts.length ? mergeGeometries(paintParts) : null, materials.paint)
 
   return { group, signalHeads }
+}
+
+/** A sign face drawn to a canvas, so the artwork lives in code with the rules. */
+function signTexture(draw: (ctx: CanvasRenderingContext2D, size: number) => void): THREE.CanvasTexture {
+  const size = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    ctx.clearRect(0, 0, size, size)
+    draw(ctx, size)
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+function polygon(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, sides: number, rotation: number): void {
+  ctx.beginPath()
+  for (let i = 0; i < sides; i++) {
+    const a = rotation + (i / sides) * Math.PI * 2
+    const x = cx + Math.cos(a) * r
+    const y = cy + Math.sin(a) * r
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+}
+
+const SIGN_FACES = {
+  stop: () =>
+    signTexture((ctx, size) => {
+      polygon(ctx, size / 2, size / 2, size * 0.46, 8, Math.PI / 8)
+      ctx.fillStyle = '#c1121f'
+      ctx.fill()
+      ctx.lineWidth = size * 0.035
+      ctx.strokeStyle = '#ffffff'
+      ctx.stroke()
+      ctx.fillStyle = '#ffffff'
+      ctx.font = `bold ${size * 0.28}px Helvetica, Arial, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('STOP', size / 2, size / 2)
+    }),
+  yield: () =>
+    signTexture((ctx, size) => {
+      // An Irish yield sign is a downward triangle with a red border.
+      polygon(ctx, size / 2, size * 0.54, size * 0.48, 3, Math.PI / 2)
+      ctx.fillStyle = '#ffffff'
+      ctx.fill()
+      ctx.lineWidth = size * 0.08
+      ctx.strokeStyle = '#c1121f'
+      ctx.stroke()
+      ctx.fillStyle = '#1a1a1a'
+      ctx.font = `bold ${size * 0.15}px Helvetica, Arial, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('YIELD', size / 2, size * 0.45)
+    }),
+  limit: (kmh: number) =>
+    signTexture((ctx, size) => {
+      ctx.beginPath()
+      ctx.arc(size / 2, size / 2, size * 0.46, 0, Math.PI * 2)
+      ctx.fillStyle = '#f4f4f0'
+      ctx.fill()
+      ctx.lineWidth = size * 0.11
+      ctx.strokeStyle = '#c1121f'
+      ctx.stroke()
+      ctx.fillStyle = '#15171a'
+      ctx.font = `bold ${size * 0.4}px Helvetica, Arial, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(String(kmh), size / 2, size * 0.52)
+    }),
+}
+
+/**
+ * A sign on a post, facing the driver who has to read it.
+ *
+ * Placed from the lane graph like everything else, so a junction that gives
+ * way has a sign saying so and a road whose limit changes is signed where it
+ * changes. A rules trainer where the rules are invisible is a memory test.
+ */
+function addSign(
+  target: THREE.Group,
+  edge: Edge,
+  nodeIsEnd: boolean,
+  s: number,
+  lateral: number,
+  texture: THREE.Texture,
+  faceSize: number,
+  height: number,
+): void {
+  const p = edgePoint(edge, s, lateral)
+  const pose = sampleEdge(edge, s)
+
+  const post = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.05, height, 7),
+    new THREE.MeshStandardMaterial({ color: 0x6f757c, roughness: 0.75, metalness: 0.3 }),
+  )
+  const base = edge.elevationAt(s)
+  post.position.set(p.x, base + height / 2, -p.y)
+  post.castShadow = true
+  target.add(post)
+
+  const y = base + height + faceSize / 2 - 0.08
+  // Face back down the road the driver is coming up.
+  const facing = pose.heading + (nodeIsEnd ? -Math.PI / 2 : Math.PI / 2)
+
+  const face = new THREE.Mesh(
+    new THREE.PlaneGeometry(faceSize, faceSize),
+    new THREE.MeshStandardMaterial({
+      map: texture,
+      transparent: true,
+      roughness: 0.6,
+      side: THREE.FrontSide,
+    }),
+  )
+  face.position.set(p.x, y, -p.y)
+  face.rotation.y = facing
+  face.castShadow = true
+  target.add(face)
+
+  // A plain back. Double-siding the face instead makes a sign readable, and
+  // mirror-reversed, from the side it is not meant for.
+  const back = new THREE.Mesh(
+    new THREE.PlaneGeometry(faceSize * 0.98, faceSize * 0.98),
+    new THREE.MeshStandardMaterial({ color: 0x5c6269, roughness: 0.85 }),
+  )
+  back.position.set(p.x - Math.sin(facing) * 0.012, y, -p.y - Math.cos(facing) * 0.012)
+  back.rotation.y = facing + Math.PI
+  target.add(back)
 }
 
 /** Primary signal on the left of the approach, as in Ireland. */

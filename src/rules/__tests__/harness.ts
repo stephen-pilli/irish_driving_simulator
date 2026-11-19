@@ -5,7 +5,8 @@ import { createSignals } from '../../world/signals'
 import { BALLYROAD } from '../../world/town'
 import { RulesEngine } from '../engine'
 import { irishRules } from '../irish'
-import type { Fault, Rule, WorldSense } from '../types'
+import { DRY_DAY, type Conditions } from '../../sim/conditions'
+import { NO_OBSERVATIONS, type Fault, type Observations, type Rule, type WorldSense } from '../types'
 
 export interface PlaceOptions {
   /** Lane index, or an explicit lateral offset from the centre line. */
@@ -26,7 +27,13 @@ export class ScriptedDrive {
   readonly signals = createSignals(this.graph)
   readonly engine: RulesEngine
   readonly state: VehicleState = createState()
-  readonly input: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+  readonly input: DriverInput = {
+    throttle: 0,
+    brake: 0,
+    steer: 0,
+    handbrake: false,
+    indicator: 'off',
+  }
 
   private edgeId: EdgeId = 'main_e'
   private s = 0
@@ -44,6 +51,12 @@ export class ScriptedDrive {
     pedestrianAhead: () => null,
     mustGiveWay: () => false,
   }
+
+  /** What the driver has looked at. Nothing, unless a test says otherwise. */
+  observations: Observations = { ...NO_OBSERVATIONS }
+
+  /** Dry daylight, unless a test says otherwise. */
+  conditions: Conditions = { ...DRY_DAY }
 
   constructor(rules: Rule[] = irishRules()) {
     this.engine = new RulesEngine(rules, this.graph, this.signals)
@@ -92,7 +105,7 @@ export class ScriptedDrive {
       this.sync()
       this.state.odometer += this.speedMs * dt
       for (const controller of this.signals.values()) controller.update(dt)
-      this.engine.update(this.state, this.input, dt, this.world)
+      this.engine.update(this.state, this.input, dt, this.world, this.observations, this.conditions)
     }
     return this
   }

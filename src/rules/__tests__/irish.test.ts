@@ -303,3 +303,116 @@ describe('other road users', () => {
     expect(drive.faultsOf('ie.pedestrian.crossing')).toHaveLength(0)
   })
 })
+
+describe('signals', () => {
+  /**
+   * Westbound on the main street, turning into the residential road.
+   *
+   * Facing west, north is on the RIGHT, so this is a right turn however much
+   * "turning off the main road into a side street" sounds like a left one.
+   * The stop line sits just inside the junction radius, so the approach has to
+   * run past it rather than up to it.
+   */
+  function turnRightAtTheCrossroads(drive: ScriptedDrive): void {
+    drive.place('main_e', 60, { speedKmh: 25, backwards: true })
+    drive.runUntilPast(10, 20)
+    drive.place('residential', 24, { speedKmh: 25 })
+    drive.run(2)
+  }
+
+  it('marks turning without signalling', () => {
+    const drive = new ScriptedDrive()
+    turnRightAtTheCrossroads(drive)
+    const faults = drive.faultsOf('ie.signals.use')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.message).toContain('without signalling')
+    expect(faults[0]!.aspect).toBe('Signals')
+  })
+
+  it('accepts a correct signal', () => {
+    const drive = new ScriptedDrive()
+    drive.input.indicator = 'right'
+    turnRightAtTheCrossroads(drive)
+    expect(drive.faultsOf('ie.signals.use')).toHaveLength(0)
+  })
+
+  it('marks a misleading signal', () => {
+    const drive = new ScriptedDrive()
+    drive.input.indicator = 'left'
+    turnRightAtTheCrossroads(drive)
+    const faults = drive.faultsOf('ie.signals.use')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.message).toContain('Signalled left and turned right')
+  })
+
+  it('does not ask for a signal to follow the road straight on', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 60, { speedKmh: 30, backwards: true })
+    drive.runUntilPast(10, 20)
+    drive.place('main_w', 300, { speedKmh: 30, backwards: true })
+    drive.run(2)
+    expect(drive.faultsOf('ie.signals.use')).toHaveLength(0)
+  })
+
+  it('marks an indicator left on down a long road', () => {
+    const drive = new ScriptedDrive()
+    drive.input.indicator = 'left'
+    drive.place('regional', 20, { speedKmh: 60 })
+    drive.run(24)
+    expect(drive.faultsOf('ie.signals.use')[0]!.message).toContain('indicator on')
+  })
+})
+
+describe('observation', () => {
+  it('marks moving off with no mirrors and no look around', () => {
+    const drive = new ScriptedDrive()
+    drive.place('regional', 40, { speedKmh: 0 })
+    drive.run(3)
+    drive.setSpeed(12)
+    drive.run(1)
+
+    const faults = drive.faultsOf('ie.observation.checks')
+    expect(faults).toHaveLength(1)
+    expect(faults[0]!.message).toContain('mirrors or looking around')
+    expect(faults[0]!.aspect).toBe('Observation')
+  })
+
+  it('accepts moving off after a mirror check and a look around', () => {
+    const drive = new ScriptedDrive()
+    drive.place('regional', 40, { speedKmh: 0 })
+    drive.run(3)
+    drive.observations = { sinceMirror: 1, sinceLeftGlance: 99, sinceRightGlance: 1 }
+    drive.setSpeed(12)
+    drive.run(1)
+    expect(drive.faultsOf('ie.observation.checks')).toHaveLength(0)
+  })
+
+  it('still marks moving off with mirrors but no look around', () => {
+    const drive = new ScriptedDrive()
+    drive.place('regional', 40, { speedKmh: 0 })
+    drive.run(3)
+    drive.observations = { sinceMirror: 1, sinceLeftGlance: 99, sinceRightGlance: 99 }
+    drive.setSpeed(12)
+    drive.run(1)
+    expect(drive.faultsOf('ie.observation.checks')[0]!.message).toContain('blind spot')
+  })
+
+  it('marks turning at a junction without a mirror check', () => {
+    const drive = new ScriptedDrive()
+    drive.place('main_e', 60, { speedKmh: 25, backwards: true })
+    drive.runUntilPast(10, 20)
+    drive.place('residential', 24, { speedKmh: 25 })
+    drive.run(2)
+    expect(drive.faultsOf('ie.observation.checks')[0]!.message).toContain('without checking the mirrors')
+  })
+
+  it('accepts a turn made after a mirror check', () => {
+    const drive = new ScriptedDrive()
+    drive.observations = { sinceMirror: 2, sinceLeftGlance: 2, sinceRightGlance: 2 }
+    drive.place('main_e', 60, { speedKmh: 25, backwards: true })
+    drive.runUntilPast(10, 20)
+    drive.place('residential', 24, { speedKmh: 25 })
+    drive.run(2)
+    expect(drive.faultsOf('ie.observation.checks')).toHaveLength(0)
+  })
+})

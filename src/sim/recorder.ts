@@ -17,7 +17,7 @@
  * steps — usually comes to a few hundred entries.
  */
 
-import type { DriverInput } from '../input/input'
+import type { DriverInput, IndicatorSide } from '../input/input'
 import type { NodeId } from '../world/laneGraph'
 import type { SignalController } from '../world/signals'
 import { createState, stepVehicle, type Gear, type VehicleParams, type VehicleState } from './vehicle'
@@ -29,6 +29,7 @@ export interface InputFrame {
   brake: number
   steer: number
   handbrake: boolean
+  indicator: IndicatorSide
 }
 
 export interface RecordedDrive {
@@ -62,7 +63,8 @@ function sameInput(a: InputFrame, b: DriverInput): boolean {
     a.throttle === b.throttle &&
     a.brake === b.brake &&
     a.steer === b.steer &&
-    a.handbrake === b.handbrake
+    a.handbrake === b.handbrake &&
+    a.indicator === b.indicator
   )
 }
 
@@ -117,6 +119,7 @@ export class DriveRecorder {
         brake: input.brake,
         steer: input.steer,
         handbrake: input.handbrake,
+        indicator: input.indicator,
       })
     }
 
@@ -163,7 +166,13 @@ export interface ReplayCursor {
  */
 export class ReplaySession {
   readonly state: VehicleState
-  readonly input: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false }
+  readonly input: DriverInput = {
+    throttle: 0,
+    brake: 0,
+    steer: 0,
+    handbrake: false,
+    indicator: 'off',
+  }
   private step = 0
   private frameIndex = 0
   private gearIndex = 0
@@ -204,6 +213,7 @@ export class ReplaySession {
       this.input.brake = f.brake
       this.input.steer = f.steer
       this.input.handbrake = f.handbrake
+      this.input.indicator = f.indicator
       this.frameIndex++
     }
     while (this.gearIndex < gears.length && gears[this.gearIndex]![0] <= this.step) {
@@ -230,6 +240,7 @@ export class ReplaySession {
     this.input.brake = 0
     this.input.steer = 0
     this.input.handbrake = false
+    this.input.indicator = 'off'
     this.step = 0
     this.frameIndex = 0
     this.gearIndex = 0

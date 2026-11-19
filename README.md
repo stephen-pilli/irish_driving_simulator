@@ -6,17 +6,26 @@ broke, graded the way the RSA driving test grades faults.
 
 Runs entirely in the browser. No backend, no install, works offline.
 
-## Status: P3 — traffic, scenarios and the post-drive report
+## Status: P5 — feature complete against the original plan
 
-Drive around a small Irish town, with other traffic, and get marked on it.
-Speed limits, road position, continuous white lines, traffic lights, stop
-signs, yields, following distance, collisions and pedestrian crossings are all
-enforced, and faults are graded the way the RSA grades them.
+Drive around a small Irish town, with traffic, and get marked on it. Fourteen
+rules are enforced across nine headings of the test report: speed, road
+position, continuous white lines, traffic lights, stop signs, yielding,
+following distance, collisions, pedestrian crossings, progress, signals and
+observation.
 
-Press **Enter** for the post-drive report, where every fault can be replayed
-from the driver's seat, and **P** for the practice library: eight set-piece
-situations — a yield junction, a roundabout, a pedestrian crossing, a cyclist
-on a road you cannot overtake on — each the same every time you try it.
+- **Enter** — the post-drive report. Every fault is seekable: pick one and the
+  car replays the seconds before it, from the driver's seat, with the same
+  traffic and the same lights.
+- **P** — the practice library. Eight set-piece situations and the three set
+  manoeuvres (turnabout, reversing around a corner, hill start), each the same
+  every time, plus **Full test route**: a planned route with an examiner giving
+  directions out loud.
+- **K** — weather. Rain cuts grip by 30%, which stretches a 100–0 stop from
+  about 43 m to about 61 m, and turns the two-second rule into four. Night
+  turns the headlights on.
+- **V** — mirrors. Interior always, wing mirrors from the driving seat.
+- **G** — on-screen controls, for driving without a keyboard.
 
 ```bash
 npm install
@@ -34,11 +43,26 @@ npm run build    # typecheck + production bundle
 | `Space` | Handbrake |
 | `R` | Reverse (only at a standstill, as in a real car) |
 | `N` | Neutral |
+| `,` / `.` | Left / right indicator (self-cancelling, as a real stalk is) |
+| `1` | Check the mirrors |
+| `2` / `3` | Look around, left / right (the blind-spot glance) |
 | `C` | Cycle camera — chase, driver's eye, overhead |
+| `V` | Mirrors — all, interior only, off |
+| `K` | Weather — dry, rain, night, night and rain |
+| `P` | Practice library, manoeuvres and the full test route |
+| `Enter` | Post-drive report |
+| `Escape` | Back out of a replay, the report or the editor |
 | `T` | Live tuning panel — handling and camera |
 | `E` | Road editor |
+| `G` | On-screen controls |
 | `M` | Engine sound |
-| `Backspace` | Reset to the start |
+| `Backspace` | Reset, or restart the manoeuvre being practised |
+
+The mirror and glance keys are not decoration. Observation is a heading on the
+test report, and the rules check that you looked before moving off and before
+turning. Per the RSA guidelines, poor mirror use on a category B car test is
+recorded as an **Observation** fault, not a Mirror fault — Mirror faults are
+for van, BE and HGV tests — so there is no separate Mirrors heading here.
 
 A gamepad works too: left stick steers, triggers are the pedals.
 
@@ -197,8 +221,41 @@ rules themselves, and the editor's document and hit testing.
 - **P3 — traffic.** IDM traffic, junction priority, pedestrians and cyclists,
   and the corner-case scenario library. *Done.*
 - **P4 — test mode.** Manoeuvres (turnabout, reversing around a corner, hill
-  start), a full route with examiner voice prompts, pass/fail verdict.
-- **P5 — polish.** Blender art pass, mirrors, night and rain, touch controls.
+  start), a full route with examiner voice prompts, pass/fail verdict. *Done.*
+- **P5 — polish.** Mirrors, night and rain, touch controls, signs. *Done, with
+  one deliberate omission — see below.*
+
+### On the Blender art pass
+
+P5 originally said "Blender art pass". It was not done, and that is a decision
+rather than an omission.
+
+Modelled assets would have bought a better-looking car and better-looking
+buildings. Against that: an asset pipeline, export and licensing to manage,
+and megabytes of download for a trainer whose value is entirely in whether it
+notices you crossed a continuous white line. The same effort went into **road
+signs** instead — stop, yield and speed-limit signs generated from the lane
+graph and placed where the rule they describe applies — because a rules trainer
+where the rules are invisible is a memory test.
+
+The art remains deliberately plain. If that changes, the renderer already takes
+everything it draws from the lane graph, so new models are a swap rather than a
+rewrite.
+
+### Conditions and grip
+
+Rain is not a filter over the picture. It changes the numbers:
+
+| | Dry | Wet |
+| --- | --- | --- |
+| Grip | 100% | 70% |
+| 100–0 km/h | ~43 m | ~61 m |
+| Following distance | 2 seconds | 4 seconds |
+
+Both are what is taught, and both are checked by tests. Gradients work the same
+way: the residential street climbs at about 7%, gravity acts along the road,
+and the parking brake holds the car until you ask for drive — which is what
+makes a hill start a hill start rather than a reaction test.
 
 ### Known gaps
 
@@ -210,10 +267,15 @@ rules themselves, and the editor's document and hit testing.
   dented by you.
 - **Traffic does not overtake or change lanes.** It follows, gives way and
   turns; a cyclist on a single-lane road will be sat behind rather than passed.
-- **No manoeuvres and no examiner.** The turnabout, reversing around a corner
-  and the hill start are P4, as is a routed test with spoken directions.
-- **No observation rules.** Mirror and blind-spot checks need mirrors and a
-  glance input, which is P5 work, and they are a large part of the real test.
+- **Observation is modelled as a keypress.** The mirror and glance keys record
+  that you looked, not that you saw. A simulator cannot tell the difference
+  without eye tracking, and pretending otherwise would be worse than saying so.
+- **The examiner's route is a walk of the network**, not a route designed by
+  anyone. It avoids cul-de-sacs, never ends on a roundabout and will not send
+  you round one twice, but it has no sense of a sensible test route.
+- **Speech depends on the browser.** The directions are always on screen; the
+  voice uses the platform's speech synthesiser, which is missing on some
+  systems and needs a user gesture on others.
 - **Speed limit rollout.** Rural local roads are correct at 60 km/h. The urban
   30 km/h and national secondary 80 km/h phases were still rolling out and
   should be confirmed before being taught as fact.

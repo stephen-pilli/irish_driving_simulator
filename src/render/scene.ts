@@ -1,6 +1,8 @@
 import * as THREE from 'three'
+import { DRY_DAY, type Conditions } from '../sim/conditions'
 import { mulberry32 } from '../core/rng'
 import { edgePoint, sampleEdge, type Edge, type LaneGraph } from '../world/laneGraph'
+import { Rain } from './rain'
 import { buildTownGeometry, type SignalHead } from './roadGeometry'
 
 const SKY = 0xc4d8ef
@@ -94,10 +96,13 @@ export class World {
   graph: LaneGraph
   private townGroup: THREE.Group | null = null
   private groundMesh: THREE.Mesh | null = null
+  readonly rain = new Rain()
+  private conditions: Conditions = DRY_DAY
   private roadsideGroup: THREE.Group | null = null
   private readonly tarmac: THREE.Material
   private readonly paint: THREE.Material
   private readonly verge: THREE.Material
+  private readonly hemisphere: THREE.HemisphereLight
 
   constructor(canvas: HTMLCanvasElement, graph: LaneGraph) {
     this.graph = graph
@@ -110,7 +115,8 @@ export class World {
 
     this.scene.background = new THREE.Color(SKY)
     this.scene.fog = new THREE.Fog(SKY, 260, 1150)
-    this.scene.add(new THREE.HemisphereLight(0x9ec4ea, 0x4c6b3c, 1.1))
+    this.hemisphere = new THREE.HemisphereLight(0x9ec4ea, 0x4c6b3c, 1.1)
+    this.scene.add(this.hemisphere)
 
     // A soft, low Irish sun. The shadow camera is small and follows the car,
     // which is the only way to get crisp shadows over a town-sized area.
@@ -146,7 +152,52 @@ export class World {
       side: THREE.DoubleSide,
     })
 
+    this.scene.add(this.rain.group)
     this.setGraph(graph)
+    this.setConditions(DRY_DAY)
+  }
+
+  /**
+   * Light and weather. The sky, the sun, the fog and the road surface all move
+   * together: a wet road that is still bright blue under a summer sun reads as
+   * a bug rather than as rain.
+   */
+  setConditions(conditions: Conditions): void {
+    this.conditions = conditions
+    const { night, rain } = conditions
+
+    const sky = night
+      ? new THREE.Color(rain > 0.2 ? 0x090d13 : 0x0b1220)
+      : new THREE.Color(rain > 0.2 ? 0x8d97a3 : SKY)
+    this.scene.background = sky
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color = sky
+      this.scene.fog.near = night ? 40 : rain > 0.2 ? 30 : 260
+      this.scene.fog.far = night ? 420 : rain > 0.2 ? 330 : 1150
+    }
+
+    this.sun.intensity = night ? 0.22 : rain > 0.2 ? 0.75 : 2.0
+    this.sun.color.set(night ? 0x9db4d8 : rain > 0.2 ? 0xd8dde4 : 0xfff1d6)
+    this.sun.castShadow = !night && rain < 0.4
+
+    // Dark enough that the headlights matter, light enough to drive by. A
+    // night you cannot see the kerb in is not a lesson, it is a black screen.
+    this.hemisphere.intensity = night ? 0.34 : rain > 0.2 ? 0.75 : 1.1
+    this.hemisphere.color.set(night ? 0x3b4a66 : 0x9ec4ea)
+    this.hemisphere.groundColor.set(night ? 0x20281c : 0x4c6b3c)
+
+    this.renderer.toneMappingExposure = night ? 1.5 : 1.05
+
+    // Wet tarmac is darker and shinier. Dry tarmac is neither.
+    const tarmac = this.tarmac as THREE.MeshStandardMaterial
+    tarmac.color.setScalar(rain > 0.2 ? 0.72 : 0.86)
+    tarmac.roughness = rain > 0.2 ? 0.45 : 0.92
+
+    this.rain.setIntensity(rain)
+  }
+
+  get currentConditions(): Conditions {
+    return this.conditions
   }
 
   /**

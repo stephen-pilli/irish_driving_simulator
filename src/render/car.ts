@@ -44,6 +44,9 @@ export class CarView {
   private readonly shell: THREE.Mesh[] = []
   private readonly steerPivots: THREE.Group[] = []
   private readonly wheelMeshes: THREE.Mesh[] = []
+  private readonly indicatorLamps: { left: THREE.MeshStandardMaterial; right: THREE.MeshStandardMaterial }
+  private readonly headlampBeams: THREE.SpotLight[] = []
+  private readonly headlampGlow: THREE.MeshStandardMaterial[] = []
   private readonly brakeLights: THREE.MeshStandardMaterial
   private readonly reverseLight: THREE.MeshStandardMaterial
   private spin = 0
@@ -94,6 +97,17 @@ export class CarView {
       const hl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, 0.42), headlightMat)
       hl.position.set(wheelbase / 2 + 2.19, 0.72, side * 0.56)
       this.group.add(hl)
+      if (hl.material instanceof THREE.MeshStandardMaterial) this.headlampGlow.push(hl.material)
+
+      // Dipped beam. No shadows from these: two more shadow-casting lights
+      // would cost more than the whole rest of the scene, and dipped beams
+      // throwing hard shadows up the road looks worse, not better.
+      const beam = new THREE.SpotLight(0xfff0d0, 0, 90, 0.5, 0.45, 1.1)
+      beam.position.set(wheelbase / 2 + 2.2, 0.7, side * 0.56)
+      beam.target.position.set(wheelbase / 2 + 26, -1.4, side * 1.6)
+      beam.castShadow = false
+      this.group.add(beam, beam.target)
+      this.headlampBeams.push(beam)
     }
 
     this.brakeLights = new THREE.MeshStandardMaterial({
@@ -105,6 +119,24 @@ export class CarView {
       const bl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 0.4), this.brakeLights)
       bl.position.set(wheelbase / 2 - 2.19, 0.78, side * 0.58)
       this.group.add(bl)
+    }
+
+    // Indicators. Amber, front and rear on each side, so the signal reads from
+    // behind in the chase view and from the mirrors once there are any.
+    this.indicatorLamps = {
+      left: new THREE.MeshStandardMaterial({ color: 0x6b4a10, emissive: 0xffa21f, emissiveIntensity: 0 }),
+      right: new THREE.MeshStandardMaterial({ color: 0x6b4a10, emissive: 0xffa21f, emissiveIntensity: 0 }),
+    }
+    for (const side of [1, -1] as const) {
+      // Local +Z is the car's RIGHT. Rotating about +Y by the heading maps
+      // local +Z to simulation (sin h, -cos h), which for a car facing east is
+      // due south — the driver's right hand side.
+      const material = side === 1 ? this.indicatorLamps.right : this.indicatorLamps.left
+      for (const x of [wheelbase / 2 + 2.19, wheelbase / 2 - 2.19]) {
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.14, 0.2), material)
+        lamp.position.set(x, 0.62, side * 0.74)
+        this.group.add(lamp)
+      }
     }
 
     this.reverseLight = new THREE.MeshStandardMaterial({
@@ -163,7 +195,26 @@ export class CarView {
     for (const mesh of this.shell) mesh.visible = visible
   }
 
-  update(state: VehicleState, braking: boolean, dt: number, ground = 0, gradient = 0): void {
+  /** Dipped beams, and the lamps themselves lit so they read from outside. */
+  setHeadlights(on: boolean): void {
+    // Candela, not an arbitrary 0-1 scale: Three's lights have been physically
+    // units since r155, and the 26 this started at lit precisely nothing.
+    for (const beam of this.headlampBeams) beam.intensity = on ? 4200 : 0
+    for (const glow of this.headlampGlow) {
+      glow.emissive.set(0xfff0d0)
+      glow.emissiveIntensity = on ? 1.6 : 0
+    }
+  }
+
+  update(
+    state: VehicleState,
+    braking: boolean,
+    dt: number,
+    ground = 0,
+    gradient = 0,
+    indicator: 'off' | 'left' | 'right' = 'off',
+    elapsed = 0,
+  ): void {
     this.group.position.set(state.x, ground, -state.y)
     // Local +X is forwards and Euler 'XYZ' applies Z first, in the car's own
     // frame, so this pitches the nose up the hill and then yaws the result.
@@ -173,6 +224,11 @@ export class CarView {
 
     this.spin -= (state.speed / WHEEL_RADIUS) * dt
     for (const wheel of this.wheelMeshes) wheel.rotation.z = this.spin
+
+    // About 1.5 Hz, which is roughly the legal flash rate.
+    const flash = indicator !== 'off' && Math.sin(elapsed * Math.PI * 3) > 0 ? 3.2 : 0
+    this.indicatorLamps.left.emissiveIntensity = indicator === 'left' ? flash : 0
+    this.indicatorLamps.right.emissiveIntensity = indicator === 'right' ? flash : 0
 
     this.brakeLights.emissiveIntensity = braking ? 2.2 : 0
     this.reverseLight.emissiveIntensity = state.gear === 'R' ? 1.4 : 0

@@ -79,7 +79,14 @@ class Attempt {
   }
 
   drive(seconds: number, input: Partial<DriverInput> = {}): this {
-    const driver: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: false, ...input }
+    const driver: DriverInput = {
+      throttle: 0,
+      brake: 0,
+      steer: 0,
+      handbrake: false,
+      indicator: 'off',
+      ...input,
+    }
     for (let i = 0; i < Math.round(seconds / DT); i++) {
       const here = this.graph.locate(this.state.x, this.state.y, this.state.heading)
       stepVehicle(

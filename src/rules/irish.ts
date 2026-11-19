@@ -1,9 +1,11 @@
 import {
+  angleDelta,
   centreLineOffset,
   stopLineAhead,
   withinJunction,
   type JunctionControl,
 } from '../world/laneGraph'
+import { followingSeconds } from '../sim/conditions'
 import type { Rule, RuleContext } from './types'
 
 const ROTR = 'Rules of the Road'
@@ -326,9 +328,10 @@ export function yieldJunctionRule(): Rule {
  * Following too closely.
  *
  * Graded against the two-second rule, which is what is taught and what the
- * marking guidelines expect to see. Two seconds of travel at the current speed
- * is the yardstick; anything under one second is treated as dangerous rather
- * than merely serious, since at that distance no reaction is possible at all.
+ * marking guidelines expect to see — and against the four-second rule when it
+ * is raining, which is the same rule applied to a road with less grip. Half
+ * the required gap is treated as dangerous rather than merely serious, since
+ * at that distance no reaction is possible at all.
  *
  * Below walking pace the rule stands down. Closing up in stationary traffic is
  * normal and is not what the two-second rule is about.
@@ -351,7 +354,8 @@ export function followingDistanceRule(): Rule {
       }
 
       const seconds = leader.gap / speed
-      if (seconds > 2) {
+      const wanted = followingSeconds(ctx.conditions)
+      if (seconds > wanted) {
         closeFor = Math.max(0, closeFor - ctx.dt * 2)
         return
       }
@@ -361,8 +365,10 @@ export function followingDistanceRule(): Rule {
       closeFor = 0
 
       ctx.report({
-        grade: seconds < 1 ? 3 : 2,
-        message: `Following ${seconds.toFixed(1)} seconds behind the vehicle in front`,
+        grade: seconds < wanted / 2 ? 3 : 2,
+        message:
+          `Following ${seconds.toFixed(1)} seconds behind the vehicle in front` +
+          (wanted > 2 ? ` — ${wanted} seconds is the rule in the wet` : ''),
         reference: `${ROTR} — Safe distance`,
       })
     },
@@ -451,6 +457,257 @@ export function carriagewayRule(): Rule {
       } else {
         offFor = Math.max(0, offFor - ctx.dt * 2)
       }
+    },
+  }
+}
+
+/**
+ * Watches a car through a junction and reports which way it went.
+ *
+ * Both the signalling rule and the junction observation rule need the same
+ * thing — "did this car actually turn here, and which way" — and neither can
+ * know it until the junction is behind them. Keeping one watcher means the two
+ * rules cannot disagree about what the driver just did.
+ */
+interface TurnWatcher {
+  /** Call every step. Returns the completed turn on the step it finishes. */
+  update(ctx: RuleContext): CompletedTurn | null
+  reset(): void
+}
+
+interface CompletedTurn {
+  nodeId: string
+  /** Signed heading change through the junction (rad); positive is left. */
+  change: number
+  direction: 'left' | 'right' | 'ahead'
+  /** Everything recorded on the approach, before the stop line was crossed. */
+  approach: {
+    indicator: 'off' | 'left' | 'right'
+    sinceMirror: number
+    sinceLeftGlance: number
+    sinceRightGlance: number
+    speedKmh: number
+  }
+}
+
+/** Anything less than this is following the road, not turning. */
+const TURN_RADIANS = 0.6
+
+function turnWatcher(): TurnWatcher {
+  // Two rules read this watcher in the same step, and the completed turn is
+  // reported once. Without caching per step, whichever rule asked first
+  // consumed the answer and the other never saw the turn at all.
+  let lastT = -1
+  let lastResult: CompletedTurn | null = null
+
+  let armedNode: string | null = null
+  let headingAtLine = 0
+  let approach: CompletedTurn['approach'] | null = null
+  let previousDistance: number | null = null
+  let signalledSide: 'off' | 'left' | 'right' = 'off'
+  let signalledAt = -Infinity
+
+  const watcher: TurnWatcher = {
+    reset() {
+      armedNode = null
+      approach = null
+      previousDistance = null
+      signalledSide = 'off'
+      signalledAt = -Infinity
+      lastT = -1
+      lastResult = null
+    },
+    update(ctx) {
+      if (ctx.t === lastT) return lastResult
+      lastT = ctx.t
+      lastResult = advance(ctx)
+      return lastResult
+    },
+  }
+
+  function advance(ctx: RuleContext): CompletedTurn | null {
+      // Remember the most recent signal, so a stalk cancelled a moment before
+      // the line still counts as having been given.
+      if (ctx.input.indicator !== 'off') {
+        signalledSide = ctx.input.indicator
+        signalledAt = ctx.t
+      }
+
+      const loc = ctx.loc
+      if (!loc) {
+        armedNode = null
+        previousDistance = null
+        return null
+      }
+
+      // Waiting for the car to clear a junction it has entered.
+      if (armedNode && approach) {
+        const stillThere = withinJunction(loc, ctx.graph, 6)
+        if (!stillThere) {
+          const change = angleDelta(headingAtLine, ctx.state.heading)
+          const nodeId = armedNode
+          const recorded = approach
+          armedNode = null
+          approach = null
+          return {
+            nodeId,
+            change,
+            direction:
+              Math.abs(change) < TURN_RADIANS ? 'ahead' : change > 0 ? 'left' : 'right',
+            approach: recorded,
+          }
+        }
+        return null
+      }
+
+      const line = stopLineAhead(loc, ctx.graph)
+      if (!line) {
+        previousDistance = null
+        return null
+      }
+
+      if (previousDistance !== null && previousDistance > 0 && line.distance <= 0) {
+        armedNode = line.nodeId
+        headingAtLine = ctx.state.heading
+        approach = {
+          // A signal given within the last five seconds is a signal given.
+          indicator: ctx.t - signalledAt < 5 ? signalledSide : 'off',
+          sinceMirror: ctx.observations.sinceMirror,
+          sinceLeftGlance: ctx.observations.sinceLeftGlance,
+          sinceRightGlance: ctx.observations.sinceRightGlance,
+          speedKmh: ctx.speedKmh,
+        }
+      }
+      previousDistance = line.distance
+      return null
+  }
+
+  return watcher
+}
+
+/**
+ * Signals: missing, misleading, or left on.
+ *
+ * The RSA guidelines ask for a correct signal, given in good time, and
+ * cancelled afterwards; all three failures are marked. Judged after the
+ * junction rather than before it, because until the car has turned there is no
+ * way to know what it should have signalled — the alternative is to read the
+ * route, and a driver who ignores the examiner's direction and turns the other
+ * way has still signalled correctly for the turn they made.
+ */
+export function signalRule(watcher: TurnWatcher): Rule {
+  let onFor = 0
+  return {
+    id: 'ie.signals.use',
+    aspect: 'Signals',
+    cooldown: 8,
+    reset() {
+      onFor = 0
+      // The watcher is shared, and this rule owns clearing it between drives.
+      watcher.reset()
+    },
+    evaluate(ctx) {
+      // Left on, going straight on. The stalk self-cancels through a turn, so
+      // this only fires when the signal was never going to be cancelled by one.
+      if (ctx.input.indicator !== 'off' && ctx.speedKmh > 8) {
+        onFor += ctx.dt
+        if (onFor > 22) {
+          onFor = 0
+          ctx.report({
+            grade: 2,
+            message: `Left the ${ctx.input.indicator} indicator on`,
+            reference: `${ROTR} — Signals`,
+          })
+        }
+      } else {
+        onFor = 0
+      }
+
+      const turn = watcher.update(ctx)
+      if (!turn || turn.direction === 'ahead') return
+
+      if (turn.approach.indicator === 'off') {
+        ctx.report({
+          grade: 2,
+          message: `Turned ${turn.direction} without signalling`,
+          reference: `${ROTR} — Signals`,
+        })
+      } else if (turn.approach.indicator !== turn.direction) {
+        ctx.report({
+          grade: 2,
+          message: `Signalled ${turn.approach.indicator} and turned ${turn.direction}`,
+          reference: `${ROTR} — Signals`,
+        })
+      }
+    },
+  }
+}
+
+/**
+ * Observation at junctions, and before moving off.
+ *
+ * Recorded under Observation rather than under any heading of its own: the RSA
+ * guidelines put poor mirror use on a category B car test under Observation,
+ * and keep Mirror faults for van, BE and HGV tests.
+ *
+ * The guidelines also accept effective use of the rear-view mirrors for most
+ * purposes but ask for a look around — a glance over the shoulder — before
+ * moving off from the kerb, so moving off wants both.
+ */
+export function observationRule(watcher: TurnWatcher): Rule {
+  let stoppedFor = 0
+  let wasStopped = false
+  return {
+    id: 'ie.observation.checks',
+    aspect: 'Observation',
+    cooldown: 6,
+    reset() {
+      stoppedFor = 0
+      wasStopped = false
+    },
+    evaluate(ctx) {
+      // --- Moving off ------------------------------------------------------
+      if (ctx.speedKmh < 1) {
+        stoppedFor += ctx.dt
+        if (stoppedFor > 1.5) wasStopped = true
+      } else {
+        if (wasStopped && ctx.speedKmh > 4 && ctx.state.speed > 0) {
+          wasStopped = false
+          const mirror = ctx.observations.sinceMirror < 6
+          const glance = ctx.observations.sinceRightGlance < 6
+          if (!mirror && !glance) {
+            ctx.report({
+              grade: 2,
+              message: 'Moved off without checking the mirrors or looking around',
+              reference: `${ROTR} — Moving off`,
+            })
+          } else if (!glance) {
+            ctx.report({
+              grade: 2,
+              message: 'Moved off without a look around for the blind spot',
+              reference: `${ROTR} — Moving off`,
+            })
+          } else if (!mirror) {
+            ctx.report({
+              grade: 2,
+              message: 'Moved off without checking the mirrors',
+              reference: `${ROTR} — Moving off`,
+            })
+          }
+        }
+        stoppedFor = 0
+      }
+
+      // --- At a junction ---------------------------------------------------
+      const turn = watcher.update(ctx)
+      if (!turn || turn.direction === 'ahead') return
+      if (turn.approach.sinceMirror < 7) return
+
+      ctx.report({
+        grade: 2,
+        message: `Turned ${turn.direction} without checking the mirrors`,
+        reference: `${ROTR} — Observation`,
+      })
     },
   }
 }
@@ -548,5 +805,11 @@ export function irishRules(): Rule[] {
     collisionRule(),
     pedestrianCrossingRule(),
     progressRule(),
+    // Both read the same watcher, so they cannot disagree about which way the
+    // car went through a junction.
+    ...(() => {
+      const watcher = turnWatcher()
+      return [signalRule(watcher), observationRule(watcher)]
+    })(),
   ]
 }
